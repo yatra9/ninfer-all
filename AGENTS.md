@@ -250,3 +250,25 @@ only when that work is in scope. Install or upgrade dependencies only when the t
 
 Create commits only when requested. Use Conventional Commit subjects with concise lowercase types
 such as `feat`, `fix`, `perf`, `bench`, `test`, `build`, `refactor`, `docs`, or `chore`.
+
+### ninfer-video work checkpoints
+
+The user has explicitly requested commits throughout the `ninfer-video` implementation. Commit each
+coherent, independently reviewable unit after its relevant checks pass. Do not accumulate unrelated
+plan phases or leave an implemented unit uncommitted while starting the next one.
+
+Before every commit:
+
+1. Update `../PLAN.md` with the exact implementation status: completed work, validation performed,
+   known limitations or unresolved findings, and the next concrete task. It must be sufficient for
+   a fresh session with no conversation history to resume immediately.
+2. If the implementation changes, resolves, or invalidates a requirement or decision, update
+   `../SPEC.md` in the same work unit. Do not leave the implementation and specification in conflict.
+3. Update affected repository documentation, command help, examples, build instructions, and active
+   architectural references so they describe the committed behavior.
+4. Review the complete diff and run the checks appropriate to that unit. Record checks that could
+   not run and why in `../PLAN.md`.
+
+`../PLAN.md` and `../SPEC.md` live outside this Git repository and therefore are not part of the
+commit. Their updates are nevertheless a required pre-commit checkpoint. Each repository commit
+must leave the branch usable and its next step explicit in `../PLAN.md`.
