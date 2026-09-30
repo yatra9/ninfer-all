@@ -6,6 +6,12 @@ and supplies Qwen Vision in bounded temporal chunks. The external behavior and p
 are specified in the workspace `../SPEC.md`; this file records how that contract fits NInfer's
 current frontend, Program, and Vision execution ownership.
 
+The canonical CPU decoder/filter implementation is `src/media/local_video/video_pipeline.*` and
+the Linux/WSLC build exposes it as the `ninfer_local_video` static-library target. The workspace
+`video-lab` CLI links those same sources from the workspace-root Docker context, so its regression
+suite exercises the product implementation rather than a copy. Native Windows support remains
+outside the initial WSLC scope.
+
 ## Existing Vision semantics
 
 For the supported Qwen3.5/3.8 Vision configuration, one raw patch contains two temporal frames and

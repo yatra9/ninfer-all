@@ -17,6 +17,16 @@ add_library(ninfer_media_decode STATIC
 )
 ninfer_internal_includes(ninfer_media_decode)
 target_link_libraries(ninfer_media_decode PRIVATE ${NINFER_FFMPEG_TARGET})
+
+# Local-video ingestion is currently supported by the Linux/WSLC product build. Keep its
+# libavfilter dependency out of the native Windows build until that platform is in scope.
+if(NOT WIN32)
+  add_library(ninfer_local_video STATIC
+    local_video/video_pipeline.cpp
+  )
+  ninfer_internal_includes(ninfer_local_video)
+  target_link_libraries(ninfer_local_video PRIVATE ${NINFER_FFMPEG_TARGET})
+endif()
 if(NINFER_MEDIA_NATIVE_PNG)
   if(DEFINED FFMPEG_VCPKG_TREE)
     target_link_libraries(ninfer_media_decode PRIVATE "${FFMPEG_VCPKG_TREE}/lib/z.lib")

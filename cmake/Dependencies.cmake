@@ -30,7 +30,7 @@ else()
   # Keep the floors the previous root build required: src/media/decode/decode.cpp is written
   # against these ABIs, so an older installation must fail at configure rather than at link.
   pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
-    libavformat>=60 libavcodec>=60 libavutil>=58 libswscale>=7)
+    libavformat>=60 libavcodec>=60 libavutil>=58 libavfilter>=9 libswscale>=7)
   set(NINFER_FFMPEG_TARGET PkgConfig::FFMPEG)
 endif()
 

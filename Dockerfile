@@ -8,6 +8,7 @@ RUN apt-get update \
         ccache \
         cmake \
         libavcodec-dev \
+        libavfilter-dev \
         libavformat-dev \
         libavutil-dev \
         libcurl4-openssl-dev \
@@ -41,7 +42,7 @@ RUN --mount=type=cache,id=ninfer-build,target=/build,sharing=locked \
         -DNINFER_BUILD_APPS=ON \
         -DBUILD_TESTING=OFF \
         -DNINFER_BUILD_BENCHMARKS=OFF \
-    && cmake --build "$build_dir" --parallel --target ninfer ninfer-serve \
+    && cmake --build "$build_dir" --parallel --target ninfer ninfer-serve ninfer_local_video \
     && mkdir -p /out \
     && cp "$build_dir/apps/ninfer" "$build_dir/apps/ninfer-serve" /out/ \
     && ccache --show-stats
@@ -53,6 +54,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
         libavcodec60 \
+        libavfilter9 \
         libavformat60 \
         libavutil58 \
         libcurl4t64 \
