@@ -100,8 +100,9 @@ releases it with the existing request cleanup and exception guarantees.
 
 The current `VisionItemControl` is item-wide. Chunk execution needs a control view containing the
 chunk's group count, patch range, position arrays, merged count, and the original global scatter
-indices. The view is derived from the item plan; it does not change the logical `VisionItem` stored
-for prompt identity.
+indices. `slice_vision_control` provides this checked, contiguous temporal-group view. It narrows
+patch and position storage while retaining global scatter indices and does not change the logical
+`VisionItem` stored for prompt identity.
 
 ## Timing and identity
 

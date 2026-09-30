@@ -209,4 +209,66 @@ VisionControl build_vision_control(const PreparedPromptData& prompt, const Visio
     return out;
 }
 
+VisionItemControl slice_vision_control(const VisionItemControl& item,
+                                       std::int32_t temporal_begin,
+                                       std::int32_t temporal_count) {
+    if (item.segment_length <= 0 || item.segment_count <= 0 || item.grid.temporal <= 0 ||
+        item.grid.temporal != item.segment_count || temporal_begin < 0 || temporal_count <= 0 ||
+        temporal_begin > item.segment_count - temporal_count) {
+        throw std::invalid_argument("Vision temporal slice is outside the item grid");
+    }
+    const std::size_t segment_length = static_cast<std::size_t>(item.segment_length);
+    const std::size_t segment_count  = static_cast<std::size_t>(item.segment_count);
+    const std::size_t patch_begin =
+        checked_mul(static_cast<std::size_t>(temporal_begin), segment_length, "slice patch begin");
+    const std::size_t patch_count =
+        checked_mul(static_cast<std::size_t>(temporal_count), segment_length, "slice patch count");
+    if (item.patch_count != checked_mul(segment_count, segment_length, "item patch count") ||
+        item.position_ids.size() != checked_mul(item.patch_count, 2, "position id count") ||
+        item.position_table_indices.size() !=
+            checked_mul(item.patch_count, 4, "position table index count") ||
+        item.position_table_weights.size() !=
+            checked_mul(item.patch_count, 4, "position table weight count") ||
+        item.merged_count == 0 || item.merged_count % segment_count != 0 ||
+        item.scatter_indices.size() != item.merged_count) {
+        throw std::invalid_argument("Vision temporal slice source metadata is incomplete");
+    }
+    if (patch_begin > std::numeric_limits<std::size_t>::max() - item.patch_begin) {
+        throw std::overflow_error("Vision temporal slice patch offset exceeds size_t");
+    }
+    const std::size_t merged_per_segment = item.merged_count / segment_count;
+    const std::size_t merged_begin = checked_mul(static_cast<std::size_t>(temporal_begin),
+                                                 merged_per_segment, "slice merged begin");
+    const std::size_t merged_count = checked_mul(static_cast<std::size_t>(temporal_count),
+                                                 merged_per_segment, "slice merged count");
+
+    VisionItemControl out;
+    out.modality       = item.modality;
+    out.grid           = item.grid;
+    out.grid.temporal  = temporal_count;
+    out.patch_begin    = item.patch_begin + patch_begin;
+    out.patch_count    = patch_count;
+    out.merged_count   = merged_count;
+    out.segment_length = item.segment_length;
+    out.segment_count  = temporal_count;
+    out.position_ids.reserve(checked_mul(patch_count, 2, "slice position id count"));
+    out.position_ids.insert(out.position_ids.end(), item.position_ids.begin() + patch_begin,
+                            item.position_ids.begin() + patch_begin + patch_count);
+    out.position_ids.insert(out.position_ids.end(),
+                            item.position_ids.begin() + item.patch_count + patch_begin,
+                            item.position_ids.begin() + item.patch_count + patch_begin + patch_count);
+    out.scatter_indices.insert(out.scatter_indices.end(),
+                               item.scatter_indices.begin() + merged_begin,
+                               item.scatter_indices.begin() + merged_begin + merged_count);
+    const std::size_t table_begin = checked_mul(patch_begin, 4, "slice table begin");
+    const std::size_t table_count = checked_mul(patch_count, 4, "slice table count");
+    out.position_table_indices.insert(
+        out.position_table_indices.end(), item.position_table_indices.begin() + table_begin,
+        item.position_table_indices.begin() + table_begin + table_count);
+    out.position_table_weights.insert(
+        out.position_table_weights.end(), item.position_table_weights.begin() + table_begin,
+        item.position_table_weights.begin() + table_begin + table_count);
+    return out;
+}
+
 } // namespace ninfer::models::qwen3_5
