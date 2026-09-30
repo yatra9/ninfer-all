@@ -30,7 +30,7 @@ add_library(ninfer_serve STATIC
 ninfer_internal_includes(ninfer_serve)
 target_link_libraries(ninfer_serve
   PUBLIC ninfer_engine Threads::Threads ninfer::json ninfer::httplib
-  PRIVATE ninfer_media_acquire ninfer_product_logging ninfer_product_prompt_input
+  PRIVATE ninfer_media_acquire ninfer_local_video_url ninfer_product_logging ninfer_product_prompt_input
           ${NINFER_CUDART_TARGET})
 
 # A WebUI is compiled in only from a local directory, never downloaded at configure time, so offline

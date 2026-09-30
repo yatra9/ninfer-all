@@ -300,8 +300,13 @@ ninfer::product::media_acquire::Source parse_media_url(const Json& part, const c
         source.kind = ninfer::product::media_acquire::SourceKind::Data;
     } else if (source.value.starts_with("http://") || source.value.starts_with("https://")) {
         source.kind = ninfer::product::media_acquire::SourceKind::Url;
+    } else if (!image && source.value.starts_with("ninfer-video://")) {
+        source.kind = ninfer::product::media_acquire::SourceKind::LocalVideo;
     } else {
-        bad_request(std::string(field) + " must use HTTP(S) or a data URI", "messages");
+        bad_request(std::string(field) +
+                        (image ? " must use HTTP(S) or a data URI"
+                               : " must use HTTP(S), a data URI, or ninfer-video"),
+                    "messages");
     }
     return source;
 }

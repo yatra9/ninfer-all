@@ -72,8 +72,13 @@ values. `authorize_local_path` requires an explicit media root and uses canonica
 to reject traversal, sibling-prefix matches, and symlink escapes before a decoder opens the file.
 The serving option and typed handoff are connected in the following integration checkpoint.
 `--local-media-root` now supplies that explicit process policy as an absolute container path; its
-empty default keeps `ninfer-video` disabled. Request routing and the typed handoff remain the next
-checkpoint.
+empty default keeps `ninfer-video` disabled.
+
+Chat Completions `video_url` and Responses `input_video.video_url` now classify the custom scheme
+as `SourceKind::LocalVideo`. Generation acquisition parses and authorizes it before byte
+acquisition, then stores the canonical path and resolved selection controls in
+`OwnedMedia::local_video`. Ordinary HTTP(S) and data inputs retain the byte-backed member. The
+frontend materializer does not consume this new alternative yet.
 
 Frontend owns Qwen geometry, temporal pairing, timestamps, placeholder layout, total token/context
 budget, and the immutable logical video plan. It computes all prompt-visible metadata before

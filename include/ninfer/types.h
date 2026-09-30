@@ -604,12 +604,34 @@ enum class ImageResizePolicy : std::uint8_t {
     RejectOversized,
 };
 
+enum class LocalVideoDeinterlace : std::uint8_t { Auto, On, Off };
+
+struct LocalVideoCrop {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
+// Authorized, parsed server-local input. Its path is canonical and its query has already been
+// validated; downstream preparation must not reinterpret the original URL.
+struct OwnedLocalVideo {
+    std::filesystem::path path;
+    std::int64_t start_frame = 0;
+    std::optional<std::int64_t> end_frame;
+    std::int64_t skip_frame = 0;
+    std::optional<LocalVideoCrop> crop;
+    double scale = 1.0;
+    LocalVideoDeinterlace deinterlace = LocalVideoDeinterlace::Auto;
+};
+
 struct OwnedMedia {
     MediaKind kind = MediaKind::Image;
     std::vector<std::uint8_t> bytes;
     std::string media_type;
     std::string source_name;
     ImageResizePolicy image_resize_policy = ImageResizePolicy::Downsize;
+    std::optional<OwnedLocalVideo> local_video;
 };
 
 struct ToolCall {
