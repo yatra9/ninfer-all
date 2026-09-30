@@ -60,6 +60,16 @@ struct SourceStats {
     std::int64_t index_scanned_frames = 0;
     std::int64_t index_reuses = 0;
 };
+struct FrameTiming {
+    std::int64_t source_index = 0;
+    std::int64_t source_pts = 0;
+    double timestamp_seconds = 0;
+};
+struct VideoPlan {
+    int width = 0, height = 0;
+    std::vector<FrameTiming> selected_frames;
+    Stats index_stats;
+};
 class VideoReader;
 class VideoSource {
 public:
@@ -70,6 +80,7 @@ public:
     VideoSource(const VideoSource&) = delete;
     VideoSource& operator=(const VideoSource&) = delete;
     const Info& info() const noexcept;
+    VideoPlan plan(const Options& options);
     VideoReader create_reader(Options options);
     SourceStats source_stats() const;
 private:

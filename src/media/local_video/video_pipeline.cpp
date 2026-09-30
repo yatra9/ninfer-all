@@ -137,6 +137,13 @@ void validate(const Options& o) {
     require(o.max_pixels>0 && o.max_pixels<=INT_MAX/4 && o.max_scan_frames>0 && o.max_selected_frames>0, "resource limits must be positive and max_pixels <= INT_MAX/4");
     if (o.crop) require(o.crop->x>=0 && o.crop->y>=0 && o.crop->width>0 && o.crop->height>0, "invalid bbox");
 }
+int output_dimension(int source, const Options& o) {
+    const double requested = std::round(source * o.scale);
+    const double aligned =
+        std::max(double(o.alignment), std::floor(requested / o.alignment + 0.5) * o.alignment);
+    require(std::isfinite(aligned) && aligned <= INT_MAX / 4, "scale produces invalid dimension");
+    return static_cast<int>(aligned);
+}
 struct Timing { std::int64_t pts; bool key; };
 std::int64_t pts(const AVFrame* f) {
     require(f->best_effort_timestamp!=AV_NOPTS_VALUE, "missing frame timestamp; refusing FPS-derived approximation");
@@ -171,13 +178,7 @@ struct Scaler {
     Frame convert(AVFrame* f, const Options& o) {
         Rect r=o.crop.value_or(Rect{0,0,f->width,f->height});
         require(std::int64_t(r.x)+r.width<=f->width && std::int64_t(r.y)+r.height<=f->height,"bbox exceeds decoded frame bounds");
-        auto dim=[&](int n){
-            double requested=std::round(n*o.scale);
-            double aligned=std::max(double(o.alignment),std::floor(requested/o.alignment+0.5)*o.alignment);
-            require(std::isfinite(aligned) && aligned<=INT_MAX/4,"scale produces invalid dimension");
-            return int(aligned);
-        };
-        Frame out; out.width=dim(r.width); out.height=dim(r.height);
+        Frame out; out.width=output_dimension(r.width,o); out.height=output_dimension(r.height,o);
         require(std::int64_t(out.width)*out.height<=o.max_pixels,"scaled dimensions exceed max_pixels");
         // Exact pixel-coordinate ROI for odd YUV420 offsets too. Low-copy YUV ROI is a later optimization.
         rgb=sws_getCachedContext(rgb,f->width,f->height,static_cast<AVPixelFormat>(f->format),f->width,f->height,AV_PIX_FMT_RGB24,SWS_BICUBIC,nullptr,nullptr,nullptr);
@@ -480,6 +481,45 @@ VideoSource& VideoSource::operator=(VideoSource&&) noexcept=default;
 const Info& VideoSource::info() const noexcept { return impl_->metadata; }
 SourceStats VideoSource::source_stats() const {
     std::lock_guard lock(impl_->mutex); return impl_->diagnostics;
+}
+VideoPlan VideoSource::plan(const Options& options) {
+    validate(options);
+    impl_->require_unchanged();
+    impl_->ensure_index(options);
+    std::lock_guard lock(impl_->mutex);
+    require(!impl_->index->empty(), "video contains no decoded frame");
+    require(static_cast<std::uint64_t>(options.start) < impl_->index->size(),
+            "start_frame is beyond EOF");
+    const Rect crop = options.crop.value_or(Rect{0, 0, impl_->metadata.width,
+                                                  impl_->metadata.height});
+    require(std::int64_t(crop.x) + crop.width <= impl_->metadata.width &&
+                std::int64_t(crop.y) + crop.height <= impl_->metadata.height,
+            "bbox exceeds decoded frame bounds");
+    VideoPlan result;
+    result.width = output_dimension(crop.width, options);
+    result.height = output_dimension(crop.height, options);
+    require(std::int64_t(result.width) * result.height <= options.max_pixels,
+            "scaled dimensions exceed max_pixels");
+    result.index_stats = impl_->index_stats;
+    const std::int64_t available_end = static_cast<std::int64_t>(impl_->index->size() - 1);
+    const std::int64_t selected_end =
+        options.end ? std::min(*options.end, available_end) : available_end;
+    const std::int64_t stride = options.skip + 1;
+    for (std::int64_t index = options.start; index <= selected_end;) {
+        checkpoint(options);
+        require(result.selected_frames.size() <
+                    static_cast<std::size_t>(options.max_selected_frames),
+                "selection exceeds max_selected_frames");
+        const auto stamp = impl_->index->at(static_cast<std::size_t>(index)).pts;
+        result.selected_frames.push_back(
+            {index, stamp, stamp * (double(impl_->metadata.time_base_num) /
+                                    impl_->metadata.time_base_den)});
+        if (selected_end - index < stride) { break; }
+        index += stride;
+    }
+    require(!result.selected_frames.empty(), "no frames selected");
+    impl_->require_unchanged();
+    return result;
 }
 VideoReader VideoSource::create_reader(Options options) {
     validate(options); impl_->require_unchanged();

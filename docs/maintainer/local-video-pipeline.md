@@ -132,6 +132,11 @@ For each two-frame group, the prompt timestamp is the mean of the two exact sour
 may produce those timestamps from exact frame timing; VFR always uses decoded PTS. Timestamps do not
 restart at the selected range or at a chunk boundary.
 
+`VideoSource::plan` now exposes this selection metadata and the crop/scale/alignment output
+geometry directly from the reusable complete index. It enforces the same selection and resource
+limits as the reader and performs no RGB conversion. A later frontend checkpoint will transform
+this result into model-specific temporal groups and token counts.
+
 The lightweight frame index may be cached across requests using canonical path plus file identity
 and modification facts. A failed or cancelled scan is not published. This cache is independent of
 prompt prefix reuse. The first implementation marks local-video prompt identity non-reusable,
