@@ -71,6 +71,9 @@ only the exact `ninfer-video://` prefix, parses every supported query field once
 values. `authorize_local_path` requires an explicit media root and uses canonical component paths
 to reject traversal, sibling-prefix matches, and symlink escapes before a decoder opens the file.
 The serving option and typed handoff are connected in the following integration checkpoint.
+`--local-media-root` now supplies that explicit process policy as an absolute container path; its
+empty default keeps `ninfer-video` disabled. Request routing and the typed handoff remain the next
+checkpoint.
 
 Frontend owns Qwen geometry, temporal pairing, timestamps, placeholder layout, total token/context
 budget, and the immutable logical video plan. It computes all prompt-visible metadata before

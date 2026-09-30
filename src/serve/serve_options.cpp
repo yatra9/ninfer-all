@@ -302,6 +302,8 @@ std::string serve_usage_text(const char* argv0) {
            "  --media-live-mib N            all live prepared media payloads (default 2048)\n"
            "  --media-preprocess-threads N  media preprocessing workers (default 0: auto, at\n"
            "                                most 16)\n"
+           "  --local-media-root PATH       enable ninfer-video for absolute files beneath this\n"
+           "                                container path (disabled by default)\n"
            "\n"
            "SAMPLING & THINKING\n"
            "  --temperature F               0..2\n"
@@ -596,6 +598,11 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 throw std::invalid_argument("--media-preprocess-threads must be in [0,64]");
             }
             options.media_preprocess_threads = static_cast<std::uint32_t>(threads);
+        } else if (arg == "--local-media-root") {
+            options.local_media_root = require_value("--local-media-root");
+            if (options.local_media_root.empty() || !options.local_media_root.is_absolute()) {
+                throw std::invalid_argument("--local-media-root must be an absolute path");
+            }
         } else if (arg == "--use-alt-prefix-caching") {
             options.context_cache.mode = ContextCacheMode::Hybrid;
         } else if (arg == "--use-original-prefix-caching") {

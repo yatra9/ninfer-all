@@ -30,6 +30,17 @@ ServeOptions parse(std::vector<std::string> arguments) {
 
 int main() {
     int failures = 0;
+    const auto local_video =
+        parse({"ninfer-serve", "model.ninfer", "--local-media-root", "/videos"});
+    failures += check(local_video.local_media_root == "/videos",
+                      "--local-media-root was not preserved");
+    failures += check(parse({"ninfer-serve", "model.ninfer"}).local_media_root.empty(),
+                      "ninfer-video was enabled by default");
+    bool relative_root_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--local-media-root", "videos"});
+    } catch (const std::invalid_argument&) { relative_root_rejected = true; }
+    failures += check(relative_root_rejected, "relative --local-media-root was accepted");
     const auto archive = parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens",
                                 "5", "--ngram-draft-tokens", "63", "--ngram-archive-mib", "512",
                                 "--ngram-session-mib", "128", "--ngram-native-sessions"});
