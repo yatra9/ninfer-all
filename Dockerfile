@@ -43,6 +43,7 @@ RUN --mount=type=cache,id=ninfer-build,target=/build,sharing=locked \
         -DBUILD_TESTING=OFF \
         -DNINFER_BUILD_BENCHMARKS=OFF \
     && cmake --build "$build_dir" --parallel --target ninfer ninfer-serve ninfer_local_video \
+        ninfer_local_video_url \
     && mkdir -p /out \
     && cp "$build_dir/apps/ninfer" "$build_dir/apps/ninfer-serve" /out/ \
     && ccache --show-stats

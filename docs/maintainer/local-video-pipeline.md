@@ -65,6 +65,13 @@ Product/serving owns URL parsing, canonical path/root authorization, source-cach
 deadline, and cancellation. It creates an owning, typed local-video input before ordinary byte
 acquisition. Model code never parses the URL or opens an unvalidated arbitrary path.
 
+`product/local_video/local_video_url.*` implements the first part of that boundary. It recognizes
+only the exact `ninfer-video://` prefix, parses every supported query field once into
+`LocalVideoSpec`, rejects unknown and duplicate fields, and rejects malformed encoding and numeric
+values. `authorize_local_path` requires an explicit media root and uses canonical component paths
+to reject traversal, sibling-prefix matches, and symlink escapes before a decoder opens the file.
+The serving option and typed handoff are connected in the following integration checkpoint.
+
 Frontend owns Qwen geometry, temporal pairing, timestamps, placeholder layout, total token/context
 budget, and the immutable logical video plan. It computes all prompt-visible metadata before
 execution. The plan contains no decoder and no decoded pixel or patch history.
