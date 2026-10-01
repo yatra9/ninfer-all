@@ -78,7 +78,7 @@ void test_rejections() {
                    "unaligned output dimensions are rejected");
     expect_invalid([&] { (void)fi::plan_local_video_prompt(1024, 768, frames, 98'303, 16'384); },
                    "aggregate token overflow is rejected");
-    expect_invalid([&] { (void)fi::plan_local_video_prompt(4096, 4096, timings(2), 98'304, 16'384); },
+    expect_invalid([&] { (void)fi::plan_local_video_prompt(4128, 4128, timings(2), 98'304, 16'384); },
                    "one group larger than the execution chunk is rejected");
     auto reversed = timings(2);
     reversed[1].timestamp_seconds = reversed[0].timestamp_seconds - 1.0;
