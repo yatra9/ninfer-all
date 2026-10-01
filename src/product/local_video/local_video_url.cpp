@@ -187,20 +187,24 @@ LocalVideoSpec parse_local_video_url(std::string_view value) {
 std::filesystem::path authorize_local_path(const std::filesystem::path& requested,
                                            const std::filesystem::path& configured_root) {
     if (configured_root.empty()) {
-        throw std::invalid_argument("ninfer-video is disabled without --local-media-root");
+        throw PathError(PathErrorKind::Disabled,
+                        "ninfer-video is disabled without --local-media-root");
     }
     std::error_code error;
     const std::filesystem::path root = std::filesystem::canonical(configured_root, error);
     if (error || !std::filesystem::is_directory(root, error) || error) {
-        throw std::invalid_argument("local media root is not an accessible directory");
+        throw PathError(PathErrorKind::InvalidRoot,
+                        "local media root is not an accessible directory");
     }
     const std::filesystem::path path = std::filesystem::canonical(requested, error);
-    if (error) { throw std::invalid_argument("local video path does not exist"); }
+    if (error) { throw PathError(PathErrorKind::NotFound, "local video path does not exist"); }
     if (!is_descendant(path, root)) {
-        throw std::invalid_argument("local video path is outside configured media root");
+        throw PathError(PathErrorKind::OutsideRoot,
+                        "local video path is outside configured media root");
     }
     if (!std::filesystem::is_regular_file(path, error) || error) {
-        throw std::invalid_argument("local video path is not a regular file");
+        throw PathError(PathErrorKind::NotRegularFile,
+                        "local video path is not a regular file");
     }
     return path;
 }

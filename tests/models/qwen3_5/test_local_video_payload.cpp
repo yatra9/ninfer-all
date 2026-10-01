@@ -1,4 +1,5 @@
 #include "models/qwen3_5/frontend/local_video_prepare.h"
+#include "models/qwen3_5/frontend/media_cache.h"
 #include "models/qwen3_5/frontend/prepared_prompt.h"
 #include "models/qwen3_5/frontend/vision_patchify.h"
 
@@ -69,8 +70,39 @@ void run(const std::filesystem::path& path) {
     ninfer::OwnedLocalVideo input;
     input.path = path;
     input.deinterlace = ninfer::LocalVideoDeinterlace::Off;
+    auto cancelled_source_cache = std::make_shared<fi::LocalVideoSourceCache>(1);
+    std::atomic<unsigned> planning_checkpoints{0};
+    bool planning_cancelled = false;
+    try {
+        (void)fi::prepare_local_video_input(
+            input,
+            ninfer::PreparationControl{
+                .deadline = {},
+                .cancellation = ninfer::CancellationView{[&planning_checkpoints] {
+                    return planning_checkpoints.fetch_add(1, std::memory_order_relaxed) >= 2;
+                }},
+            },
+            24, 12, cancelled_source_cache);
+    } catch (const ninfer::RequestError& error) {
+        planning_cancelled = error.kind() == ninfer::RequestErrorKind::Cancelled;
+    }
+    expect(planning_cancelled, "initial index construction observes request cancellation");
+    expect(cancelled_source_cache->acquire(path)->source_stats().index_builds == 0,
+           "cancelled initial index is not published");
+    ninfer::OwnedLocalVideo oversized = input;
+    oversized.scale = 128.0;
+    bool pixels_are_budget = false;
+    try {
+        (void)fi::prepare_local_video_input(oversized, {}, 98'304, 16'384);
+    } catch (const fi::ProcessorError& error) {
+        pixels_are_budget = error.kind() == fi::ProcessorErrorKind::BudgetExceeded;
+    }
+    expect(pixels_are_budget, "local decoded-pixel limit is classified as a media budget");
     auto source_cache = std::make_shared<fi::LocalVideoSourceCache>(2);
-    auto prepared = fi::prepare_local_video_input(input, {}, 24, 12, source_cache);
+    auto payload_account = std::make_shared<fi::MediaPreprocessCache>(0, 16 * 1024 * 1024, 1,
+                                                                      16 * 1024 * 1024);
+    auto prepared = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,
+                                                   payload_account);
 
     expect(prepared.prompt.width == 96 && prepared.prompt.height == 64,
            "prepared dimensions follow the fixture rather than a fixed resolution");
@@ -99,8 +131,23 @@ void run(const std::filesystem::path& path) {
     std::vector<std::uint16_t> actual;
     for (std::size_t index = 0; index < prepared.prompt.chunks.size(); ++index) {
         auto payload = reader.read_chunk(index);
+        expect(payload_account->stats().live_bytes == payload->patch_elements * sizeof(std::uint16_t),
+               "local chunk payload is charged to the shared live-memory account");
         actual.insert(actual.end(), payload->span().begin(), payload->span().end());
     }
+    expect(payload_account->stats().live_bytes == 0,
+           "local chunk payload releases its live-memory reservation");
+    auto tiny_account = std::make_shared<fi::MediaPreprocessCache>(0, 1, 1);
+    auto memory_limited = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,
+                                                         tiny_account);
+    bool live_limit_reported = false;
+    try {
+        fi::LocalVideoPayloadReader limited_reader(memory_limited);
+        (void)limited_reader.read_chunk(0);
+    } catch (const ninfer::RequestError& error) {
+        live_limit_reported = error.kind() == ninfer::RequestErrorKind::MediaBudgetExceeded;
+    }
+    expect(live_limit_reported, "local chunk obeys the shared live-memory capacity");
     expect(actual == expected,
            "sequential chunk payloads exactly equal the independently decoded full payload");
 
@@ -116,7 +163,8 @@ void run(const std::filesystem::path& path) {
     expect(stats.index_builds == 1, "planning builds the source index once");
     expect(stats.index_reuses >= 2, "reference and payload readers reuse the prepared index");
 
-    auto repeated = fi::prepare_local_video_input(input, {}, 24, 12, source_cache);
+    auto repeated = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,
+                                                   payload_account);
     expect(repeated.source == prepared.source,
            "a later request reuses the cached source for the unchanged path");
     expect(repeated.source->source_stats().index_builds == 1 &&

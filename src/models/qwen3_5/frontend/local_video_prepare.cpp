@@ -115,7 +115,15 @@ LocalVideoPayloadReader::read_chunk(std::size_t chunk_index) {
     }
     check_preparation_control(impl_->control, "local video decoding");
     const LocalVideoChunkPlan& plan = impl_->input->prompt.chunks[chunk_index];
-    media::local_video::Chunk decoded = impl_->reader.read_chunk(plan.frame_count);
+    media::local_video::Chunk decoded;
+    try {
+        decoded = impl_->reader.read_chunk(plan.frame_count);
+    } catch (const media::local_video::Error& error) {
+        throw RequestError(error.kind() == media::local_video::ErrorKind::ResourceLimit
+                               ? RequestErrorKind::MediaBudgetExceeded
+                               : RequestErrorKind::InvalidMedia,
+                           error.what());
+    }
     if (decoded.frames.size() != plan.frame_count) {
         throw std::runtime_error("local video ended before its prepared chunk boundary");
     }
@@ -135,9 +143,11 @@ LocalVideoPayloadReader::read_chunk(std::size_t chunk_index) {
     const std::size_t patches =
         plan.temporal_count * static_cast<std::size_t>(impl_->input->prompt.grid_height) *
         static_cast<std::size_t>(impl_->input->prompt.grid_width);
-    auto payload = std::make_shared<qwen3_5::PreparedMediaPayload>();
-    payload->patch_elements = checked_elements(patches);
-    payload->patches = std::make_unique<std::uint16_t[]>(payload->patch_elements);
+    if (!impl_->input->payload_account) {
+        throw std::logic_error("local video payload has no live-memory account");
+    }
+    auto payload = impl_->input->payload_account->allocate_payload(checked_elements(patches),
+                                                                   impl_->control);
     std::size_t cursor = 0;
     for (std::size_t temporal = 0; temporal < plan.temporal_count; ++temporal) {
         const std::size_t first_index = temporal * 2;
@@ -170,7 +180,8 @@ PreparedLocalVideoInput
 prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl& control,
                           std::uint64_t maximum_total_tokens,
                           std::uint64_t maximum_chunk_tokens,
-                          const std::shared_ptr<LocalVideoSourceCache>& source_cache) {
+                          const std::shared_ptr<LocalVideoSourceCache>& source_cache,
+                          const std::shared_ptr<MediaPreprocessCache>& payload_account) {
     check_preparation_control(control, "local video planning");
     std::shared_ptr<media::local_video::VideoSource> source;
     media::local_video::Options options;
@@ -199,6 +210,11 @@ prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl
                                  ? ProcessorErrorKind::BudgetExceeded
                                  : ProcessorErrorKind::InvalidMedia,
                              error.what());
+    } catch (const media::local_video::Error& error) {
+        throw ProcessorError(error.kind() == media::local_video::ErrorKind::ResourceLimit
+                                 ? ProcessorErrorKind::BudgetExceeded
+                                 : ProcessorErrorKind::InvalidMedia,
+                             error.what());
     } catch (const std::runtime_error& error) {
         throw ProcessorError(ProcessorErrorKind::InvalidMedia, error.what());
     }
@@ -208,6 +224,7 @@ prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl
     const media::local_video::SourceStats source_stats = source->source_stats();
     return PreparedLocalVideoInput{
         .source = std::move(source),
+        .payload_account = payload_account,
         .reader_options = std::move(options),
         .index_stats = video.index_stats,
         .source_stats = source_stats,

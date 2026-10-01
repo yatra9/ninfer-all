@@ -35,6 +35,20 @@ void check(int rc, const char* stage) {
     throw FfmpegError(std::string(stage) + ": " + text);
 }
 void require(bool ok, const char* text) { if (!ok) throw std::runtime_error(text); }
+void require_resource(bool ok, const char* text) {
+    if (!ok) throw Error(ErrorKind::ResourceLimit, text);
+}
+void require_unchanged(bool ok, const char* text) {
+    if (!ok) throw Error(ErrorKind::SourceChanged, text);
+}
+bool file_identity_matches(const std::filesystem::path& path, std::uintmax_t size,
+                           std::filesystem::file_time_type modified) {
+    std::error_code error;
+    const auto current_size = std::filesystem::file_size(path, error);
+    if (error || current_size != size) return false;
+    const auto current_modified = std::filesystem::last_write_time(path, error);
+    return !error && current_modified == modified;
+}
 void checkpoint(const Options& o) { if (o.checkpoint) o.checkpoint(); }
 struct FrameDelete { void operator()(AVFrame* p) const { av_frame_free(&p); } };
 using AvFrame = std::unique_ptr<AVFrame, FrameDelete>;
@@ -134,7 +148,7 @@ void validate(const Options& o) {
     require(o.skip>=0 && o.skip<INT64_MAX, "skip_frame must be in [0, INT64_MAX-1]");
     require(std::isfinite(o.scale) && o.scale>0, "scale must be finite and > 0");
     require(o.alignment>0 && o.alignment<=4096, "alignment must be in [1,4096]");
-    require(o.max_pixels>0 && o.max_pixels<=INT_MAX/4 && o.max_scan_frames>0 && o.max_selected_frames>0, "resource limits must be positive and max_pixels <= INT_MAX/4");
+    require_resource(o.max_pixels>0 && o.max_pixels<=INT_MAX/4 && o.max_scan_frames>0 && o.max_selected_frames>0, "resource limits must be positive and max_pixels <= INT_MAX/4");
     if (o.crop) require(o.crop->x>=0 && o.crop->y>=0 && o.crop->width>0 && o.crop->height>0, "invalid bbox");
 }
 int output_dimension(int source, const Options& o) {
@@ -150,7 +164,7 @@ std::int64_t pts(const AVFrame* f) {
     return f->best_effort_timestamp;
 }
 void geometry(const AVFrame* f, const Options& o) {
-    require(f->width>0 && f->height>0 && std::int64_t(f->width)*f->height<=o.max_pixels, "source dimensions exceed max_pixels");
+    require_resource(f->width>0 && f->height>0 && std::int64_t(f->width)*f->height<=o.max_pixels, "source dimensions exceed max_pixels");
     require(!(f->flags & AV_FRAME_FLAG_CORRUPT), "corrupt decoded frame");
 }
 struct Filter {
@@ -179,7 +193,7 @@ struct Scaler {
         Rect r=o.crop.value_or(Rect{0,0,f->width,f->height});
         require(std::int64_t(r.x)+r.width<=f->width && std::int64_t(r.y)+r.height<=f->height,"bbox exceeds decoded frame bounds");
         Frame out; out.width=output_dimension(r.width,o); out.height=output_dimension(r.height,o);
-        require(std::int64_t(out.width)*out.height<=o.max_pixels,"scaled dimensions exceed max_pixels");
+        require_resource(std::int64_t(out.width)*out.height<=o.max_pixels,"scaled dimensions exceed max_pixels");
         // Exact pixel-coordinate ROI for odd YUV420 offsets too. Low-copy YUV ROI is a later optimization.
         rgb=sws_getCachedContext(rgb,f->width,f->height,static_cast<AVPixelFormat>(f->format),f->width,f->height,AV_PIX_FMT_RGB24,SWS_BICUBIC,nullptr,nullptr,nullptr);
         require(rgb!=nullptr,"RGB converter allocation failed");
@@ -215,7 +229,7 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
     validate(o); require(bool(consume),"frame callback is required");
     const auto original_size=std::filesystem::file_size(path);
     const auto original_time=std::filesystem::last_write_time(path);
-    auto unchanged=[&]{require(std::filesystem::file_size(path)==original_size && std::filesystem::last_write_time(path)==original_time,"input changed during processing");};
+    auto unchanged=[&]{require_unchanged(file_identity_matches(path,original_size,original_time),"input changed during processing");};
     Stats stats; std::vector<Timing> owned_index;
     const std::vector<Timing>* index_ptr=reusable_index;
     if(reusable_index_stats) {
@@ -230,7 +244,7 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
         while(true) {
             if(o.end && owned_index.size()>std::uint64_t(*o.end)+2) break;
             if(!scan.next(f.get())) {stats.index_reached_eof=true; break;}
-            geometry(f.get(),o); require(owned_index.size()<std::uint64_t(o.max_scan_frames),"index exceeds max_scan_frames");
+            geometry(f.get(),o); require_resource(owned_index.size()<std::uint64_t(o.max_scan_frames),"index exceeds max_scan_frames");
             auto stamp=pts(f.get());
             if(!owned_index.empty()) {
                 require(stamp>owned_index.back().pts,"non-increasing PTS cannot be indexed unambiguously");
@@ -305,7 +319,7 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
     std::deque<Pending> pending;
     auto emit=[&](AVFrame* decoded,const Pending& p) {
         if(p.index<o.start || (o.end && p.index>*o.end) || (p.index-o.start)%(o.skip+1)!=0) return;
-        require(stats.selected_frames<o.max_selected_frames,"selection exceeds max_selected_frames"); checkpoint(o);
+        require_resource(stats.selected_frames<o.max_selected_frames,"selection exceeds max_selected_frames"); checkpoint(o);
         auto result=scaler.convert(decoded,o); result.source_index=p.index; result.source_pts=p.pts;
         result.timestamp_seconds=p.pts*av_q2d(tb); result.deinterlaced=p.deinterlaced;
         consume(std::move(result)); ++stats.selected_frames;
@@ -325,7 +339,7 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
     int initial_width=0,initial_height=0,initial_format=-1;
     while(first_ready || input->next(f.get())) {
         first_ready=false; checkpoint(o); geometry(f.get(),o);
-        require(stats.decoded_frames<o.max_scan_frames,"decode exceeds max_scan_frames");
+        require_resource(stats.decoded_frames<o.max_scan_frames,"decode exceeds max_scan_frames");
         if(stats.first_decoded_index<0) stats.first_decoded_index=cursor;
         ++stats.decoded_frames;
         if(report_progress) report_progress(stats);
@@ -376,9 +390,9 @@ struct VideoSource::Impl {
         modified=std::filesystem::last_write_time(path);
     }
     void require_unchanged() const {
-        require(std::filesystem::file_size(path)==size &&
-                std::filesystem::last_write_time(path)==modified,
-                "input changed after VideoSource was opened");
+        ninfer::media::local_video::require_unchanged(
+            file_identity_matches(path,size,modified),
+            "input changed after VideoSource was opened");
     }
     void ensure_index(const Options& o) {
         std::lock_guard lock(mutex);
@@ -390,7 +404,7 @@ struct VideoSource::Impl {
         std::optional<std::int64_t> delta; bool variable=false;
         while(scan.next(f.get())) {
             geometry(f.get(),o);
-            require(candidate->size()<std::uint64_t(o.max_scan_frames),"index exceeds max_scan_frames");
+            require_resource(candidate->size()<std::uint64_t(o.max_scan_frames),"index exceeds max_scan_frames");
             auto stamp=pts(f.get());
             if(!candidate->empty()) {
                 require(stamp>candidate->back().pts,"non-increasing PTS cannot be indexed unambiguously");
@@ -498,8 +512,8 @@ VideoPlan VideoSource::plan(const Options& options) {
     VideoPlan result;
     result.width = output_dimension(crop.width, options);
     result.height = output_dimension(crop.height, options);
-    require(std::int64_t(result.width) * result.height <= options.max_pixels,
-            "scaled dimensions exceed max_pixels");
+    require_resource(std::int64_t(result.width) * result.height <= options.max_pixels,
+                     "scaled dimensions exceed max_pixels");
     result.index_stats = impl_->index_stats;
     const std::int64_t available_end = static_cast<std::int64_t>(impl_->index->size() - 1);
     const std::int64_t selected_end =
@@ -507,9 +521,9 @@ VideoPlan VideoSource::plan(const Options& options) {
     const std::int64_t stride = options.skip + 1;
     for (std::int64_t index = options.start; index <= selected_end;) {
         checkpoint(options);
-        require(result.selected_frames.size() <
-                    static_cast<std::size_t>(options.max_selected_frames),
-                "selection exceeds max_selected_frames");
+        require_resource(result.selected_frames.size() <
+                             static_cast<std::size_t>(options.max_selected_frames),
+                         "selection exceeds max_selected_frames");
         const auto stamp = impl_->index->at(static_cast<std::size_t>(index)).pts;
         result.selected_frames.push_back(
             {index, stamp, stamp * (double(impl_->metadata.time_base_num) /
@@ -536,6 +550,7 @@ VideoReader& VideoReader::operator=(VideoReader&&) noexcept=default;
 Chunk VideoReader::read_chunk(std::size_t max_frames) {
     require(max_frames>0,"max_frames must be > 0");
     require(impl_!=nullptr,"reader has been moved from");
+    impl_->source->require_unchanged();
     Chunk chunk; chunk.frames.reserve(max_frames);
     std::unique_lock lock(impl_->mutex);
     while(chunk.frames.size()<max_frames) {
@@ -558,6 +573,8 @@ Chunk VideoReader::read_chunk(std::size_t max_frames) {
     if(impl_->failure) std::rethrow_exception(impl_->failure);
     chunk.eof=impl_->finished && !impl_->ready;
     chunk.cumulative_stats=impl_->current_stats();
+    lock.unlock();
+    impl_->source->require_unchanged();
     return chunk;
 }
 

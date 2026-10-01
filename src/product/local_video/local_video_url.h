@@ -3,11 +3,23 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace ninfer::product::local_video {
 
 enum class DeinterlaceMode { Auto, On, Off };
+enum class PathErrorKind { Disabled, InvalidRoot, NotFound, OutsideRoot, NotRegularFile };
+class PathError final : public std::invalid_argument {
+public:
+    PathError(PathErrorKind kind, std::string message)
+        : std::invalid_argument(std::move(message)), kind_(kind) {}
+    [[nodiscard]] PathErrorKind kind() const noexcept { return kind_; }
+private:
+    PathErrorKind kind_;
+};
 
 struct CropRect {
     int x = 0;

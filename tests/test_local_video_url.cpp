@@ -26,6 +26,17 @@ template <class Function> void rejects(Function&& function, std::string_view exp
     throw std::runtime_error("invalid input was accepted");
 }
 
+template <class Function>
+void rejects_path(Function&& function, local_video::PathErrorKind expected) {
+    try {
+        [[maybe_unused]] auto ignored = function();
+    } catch (const local_video::PathError& error) {
+        require(error.kind() == expected, "unexpected path error kind");
+        return;
+    }
+    throw std::runtime_error("invalid path was accepted");
+}
+
 class Fixture final {
 public:
     Fixture()
@@ -93,17 +104,21 @@ int main() {
         require(local_video::authorize_local_path(fixture.video, fixture.root) ==
                     std::filesystem::canonical(fixture.video),
                 "authorized path was not canonicalized");
-        rejects([&] { return local_video::authorize_local_path(fixture.video, {}); }, "disabled");
-        rejects([&] { return local_video::authorize_local_path(fixture.outside, fixture.root); },
-                "outside");
-        rejects([&] { return local_video::authorize_local_path(fixture.sibling, fixture.root); },
-                "outside");
+        rejects_path([&] { return local_video::authorize_local_path(fixture.video, {}); },
+                     local_video::PathErrorKind::Disabled);
+        rejects_path([&] { return local_video::authorize_local_path(fixture.outside, fixture.root); },
+                     local_video::PathErrorKind::OutsideRoot);
+        rejects_path([&] { return local_video::authorize_local_path(fixture.sibling, fixture.root); },
+                     local_video::PathErrorKind::OutsideRoot);
+        rejects_path([&] { return local_video::authorize_local_path(fixture.root/"missing.mp4", fixture.root); },
+                     local_video::PathErrorKind::NotFound);
 
         std::error_code error;
         const auto escape = fixture.root / "escape.mp4";
         std::filesystem::create_symlink(fixture.outside, escape, error);
         require(!error, "failed to create symlink fixture");
-        rejects([&] { return local_video::authorize_local_path(escape, fixture.root); }, "outside");
+        rejects_path([&] { return local_video::authorize_local_path(escape, fixture.root); },
+                     local_video::PathErrorKind::OutsideRoot);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

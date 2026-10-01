@@ -968,7 +968,10 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
     const PreparationControl worker_control{
         .deadline     = control.deadline,
         .cancellation = CancellationView(
-            [&stop_preparation] { return stop_preparation.load(std::memory_order_relaxed); }),
+            [&stop_preparation, &control] {
+                return stop_preparation.load(std::memory_order_relaxed) ||
+                       control.cancellation.requested();
+            }),
     };
     const media::decode::Policy policy{
         .max_bytes                  = options_.max_encoded_media_bytes,
@@ -1007,7 +1010,7 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
                     prepare_local_video_input(*part->media.local_video, worker_control,
                                               options_.max_local_video_tokens,
                                               options_.max_vision_execution_tokens,
-                                              local_video_cache_));
+                                              local_video_cache_, media_cache_));
                 pending_items.emplace_back();
                 continue;
 #endif

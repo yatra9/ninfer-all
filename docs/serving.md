@@ -741,9 +741,16 @@ builds from deadlocking the memory account.
 
 An expanded prompt beyond `--max-context` returns HTTP 400 `context_length_exceeded`, including
 the prepared token count and configured context ceiling. A media preprocessing resource rejection
-returns HTTP 400 `media_budget_exceeded`. HTTP 413 `request_too_large` is reserved for a raw request
-body that exceeds `--max-request-mib` before JSON parsing; it is not used for model-context or media
-resource errors.
+returns HTTP 413 `media_budget_exceeded`. A raw request body that exceeds `--max-request-mib`
+before JSON parsing also returns 413, with the distinct code `request_too_large`.
+
+`ninfer-video` charges each BF16 chunk payload to the same `--media-live-mib` account used by
+ordinary media payloads; decoded RGB remains bounded to the current chunk. Its initial index scan
+and each chunk read observe request cancellation,
+and the source file identity is checked before and after every chunk. A missing local file returns
+HTTP 404 `local_video_not_found`; a canonical path outside `--local-media-root` returns HTTP 403
+`local_video_forbidden`. Token, decoded-pixel, selected-frame, scan, and live-memory limits return
+HTTP 413 `media_budget_exceeded`; malformed media remains HTTP 400 `invalid_media`.
 
 ## OpenAI Responses Core
 

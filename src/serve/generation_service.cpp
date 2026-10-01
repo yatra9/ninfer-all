@@ -139,6 +139,30 @@ using Clock = std::chrono::steady_clock;
     throw ApiException(std::move(error));
 }
 
+[[noreturn]] void throw_local_path_error(
+    const ninfer::product::local_video::PathError& exception) {
+    ApiError error;
+    error.param   = "messages";
+    error.message = exception.what();
+    switch (exception.kind()) {
+    case ninfer::product::local_video::PathErrorKind::NotFound:
+        error.status = 404;
+        error.code   = "local_video_not_found";
+        break;
+    case ninfer::product::local_video::PathErrorKind::OutsideRoot:
+        error.status = 403;
+        error.code   = "local_video_forbidden";
+        break;
+    case ninfer::product::local_video::PathErrorKind::Disabled:
+    case ninfer::product::local_video::PathErrorKind::InvalidRoot:
+    case ninfer::product::local_video::PathErrorKind::NotRegularFile:
+        error.status = 400;
+        error.code   = "invalid_local_video";
+        break;
+    }
+    throw ApiException(std::move(error));
+}
+
 [[noreturn]] void throw_preparation_cancelled() {
     ApiError error;
     error.status  = 499;
@@ -183,6 +207,8 @@ ninfer::OwnedMedia acquire_media(const ContentPart& part, Clock::time_point dead
             }
             media.local_video = std::move(local);
             return media;
+        } catch (const ninfer::product::local_video::PathError& exception) {
+            throw_local_path_error(exception);
         } catch (const std::invalid_argument& exception) {
             throw_invalid_input(exception, "invalid_local_video");
         }

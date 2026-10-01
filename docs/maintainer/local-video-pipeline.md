@@ -16,8 +16,8 @@ outside the initial WSLC scope.
 
 For the supported Qwen3.5/3.8 Vision configuration, one raw patch contains two temporal frames and
 one 16x16 spatial patch. Four raw patches (a 2x2 spatial merge) produce one prompt Vision token.
-The frontend currently prepares one immutable BF16 patch payload per media item and retains every
-payload until its Vision item has encoded.
+The ordinary-media frontend prepares one immutable BF16 patch payload per media item and retains
+each payload until its Vision item has encoded. Local video uses the bounded chunk path below.
 
 One video item has a grid `[temporal_groups, patch_rows, patch_columns]`. `build_vision_control`
 sets:
@@ -114,8 +114,10 @@ public:
 item has a null local-video slot, while a local video has a typed plan and a null eager payload.
 Request planning validates total item metadata and each chunk extent. `VisionPrefillSession`
 creates one request-owned reader, obtains each payload in plan order, encodes it, and releases it
-with the existing request cleanup and exception guarantees. Cancellation and the request deadline
-are checked during decode and at patchification row boundaries.
+with the existing request cleanup and exception guarantees. Each payload reserves bytes from the
+shared media live-memory account until its final reference is released. Cancellation and the
+request deadline are checked during indexing, decode, live-memory waits, and patchification row
+boundaries. Source identity is checked before and after every chunk returned to execution.
 
 The current `VisionItemControl` is item-wide. Chunk execution needs a control view containing the
 chunk's group count, patch range, position arrays, merged count, and the original global scatter
@@ -130,10 +132,10 @@ For each two-frame group, the prompt timestamp is the mean of the two exact sour
 may produce those timestamps from exact frame timing; VFR always uses decoded PTS. Timestamps do not
 restart at the selected range or at a chunk boundary.
 
-`VideoSource::plan` now exposes this selection metadata and the crop/scale/alignment output
-geometry directly from the reusable complete index. It enforces the same selection and resource
-limits as the reader and performs no RGB conversion. A later frontend checkpoint will transform
-this result into model-specific temporal groups and token counts.
+`VideoSource::plan` exposes this selection metadata and the crop/scale/alignment output geometry
+directly from the reusable complete index. It enforces the same selection and resource limits as
+the reader and performs no RGB conversion. The frontend transforms this result into model-specific
+temporal groups and token counts before execution.
 
 The frontend keeps up to eight `VideoSource` entries in an LRU cache keyed by canonical path,
 file size, and modification time. An unchanged path reuses its completed frame index across
@@ -166,7 +168,8 @@ columns exactly.
 
 On the RTX 3090 target, the same 256-token video was executed through overlay Vision once with a
 256-token envelope and once as four 64-token chunks. The greedy first token matched, its logprob
-differed by 0.07572, and 19 of the top 20 alternatives were shared, within the repository's
-existing real-Vision qualification criterion. A 1024x768, 256-frame input completed as 98,304
-Vision tokens in seven chunks. A client disconnect during that workload cancelled the request and
-the next media request completed, demonstrating request cleanup and overlay restoration.
+differed by 0.07572, and 19 of the top 20 alternatives were shared. This is an end-to-end behavioral
+comparison, not a direct comparison of the Vision embedding tensors. A 1024x768, 256-frame input
+completed as 98,304 Vision tokens in seven chunks. A client disconnect during that workload
+cancelled the request and the next media request completed, demonstrating request cleanup and
+overlay restoration.

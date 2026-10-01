@@ -4,10 +4,21 @@
 #include <functional>
 #include <optional>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ninfer::media::local_video {
+enum class ErrorKind { InvalidInput, ResourceLimit, SourceChanged };
+class Error final : public std::runtime_error {
+public:
+    Error(ErrorKind kind, std::string message)
+        : std::runtime_error(std::move(message)), kind_(kind) {}
+    [[nodiscard]] ErrorKind kind() const noexcept { return kind_; }
+private:
+    ErrorKind kind_;
+};
 enum class Deinterlace { Auto, On, Off };
 enum class ReadMode { Sequential, IndexedSeek };
 struct Rect { int x, y, width, height; };
