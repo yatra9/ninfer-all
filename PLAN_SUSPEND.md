@@ -164,16 +164,18 @@ prepareがGPUへ触れる経路が見つかれば同じ実行権の管理対象�
 
 ### P2: artifactから既存weight arenaへの再upload
 
-- [ ] materializerを「初回storage/view構築」と「既存device destinationへのupload」に分離する。
+- [x] materializerを「初回storage/view構築」と「既存device destinationへのupload」に分離する。
   既存のread coalescing、pinned staging、async H2D、transcodeを共通経路として維持する。
-- [ ] suspend有効時のみ、復元に必要なReaderとdevice placement情報をModel側の所有物として保持する。
+- [x] suspend有効時のみ、復元に必要なReaderとdevice placement情報をModel側の所有物として保持する。
   Readerのアドレスを安定させ、dangling `plan.source` やHostPlacement payloadの重複保持を避ける。
-- [ ] multipart artifactも起動時と同じsourceから読み、destination容量・offset・alignmentを検査する。
-- [ ] artifactはEngine存続中に変更しない契約を明記する。復元元不整合、破損、read errorはERRORにする。
+- [x] multipart artifactも起動時と同じsourceから読み、destination容量・offset・alignmentを検査する。
+- [x] artifactはEngine存続中に変更しない契約を明記する。復元元不整合、破損、read errorはERRORにする。
   既存artifact検証を再利用し、毎回17 GiBの余分なmirrorや全量二重readを追加しない。
-- [ ] weight parent/Parameters/既存GraphExecを作り直さず、起動時と同じdevice bytesを復元する。
+- [x] weight parent/Parameters/既存GraphExecを作り直さず、起動時と同じdevice bytesを復元する。
 
 出口条件: 通常・overlay双方のweight所有者で、同一VAへの復元と既存GraphExec replayが成功すること。
+
+P2検証（2026-10-02）: WSLC CUDA 13.1 / GCC 13 / RTX 3090でartifact materialization targetを正式buildし、CTest成功。通常・overlayのmultipart fixtureで10回の同一VA復帰、全weight bytes、既存GraphExec replay、Host資源の保持、復元元変更の拒否を確認。Q8→Q4/Q6 transcodeの復帰とdestination容量拒否も成功。Model/load/ModelInstanceの構文検査成功。任意payload改変の全量hash検出は行わず、immutable source契約と既存framing検証、size/mtime検査を使用する。実モデルのweight復帰はP6で確認する。次はP3のwhole-persistent snapshot、fresh workspace、idle/stream監査とsuspended終了処理。
 
 ### P3: Programのpersistent snapshotとworkspace復帰
 

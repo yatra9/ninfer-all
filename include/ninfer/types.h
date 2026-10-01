@@ -409,6 +409,8 @@ struct EngineOptions {
     // Zero selects a bounded worker count from the detected host concurrency.
     std::uint32_t media_preprocess_threads = 0;
     bool enable_vision                     = false;
+    // Single-GPU Generation only; keeps fixed virtual addresses across explicit idle suspend.
+    bool enable_model_suspend              = false;
     VisionResidency vision_residency       = VisionResidency::Resident;
     // Speed-for-quality trades, opt-in and off by default. Measured in
     // docs/maintainer/quality-trade-experiments.md: lm_head_q4 costs +0.69% perplexity for a

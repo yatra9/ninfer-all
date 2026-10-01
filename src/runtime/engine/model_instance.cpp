@@ -30,6 +30,10 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 void validate_options(const EngineOptions& options) {
+    if (options.enable_model_suspend &&
+        (options.purpose != EnginePurpose::Generation || options.devices.size() > 1 || options.wddm_evictable_budget)) {
+        throw std::invalid_argument("model suspend requires single-GPU Generation without the WDDM evictable budget");
+    }
     if (options.artifact_path.empty()) {
         throw std::invalid_argument("Engine artifact_path must not be empty");
     }
@@ -463,7 +467,7 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext& 
     // the stage split is decided once, here, and carried in the options from then on.
     EngineOptions options = requested;
     StartupPhaseScope inspect(options.startup_observer, StartupPhase::ArtifactInspect);
-    artifact::Reader reader(options.artifact_path);
+    auto reader = std::make_shared<artifact::Reader>(options.artifact_path);
     inspect.complete();
     if (options.devices.size() > 1 && options.stage_layers.empty()) {
         const std::vector<std::size_t> free_now = free_bytes_by_rank(device);
@@ -473,14 +477,15 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext& 
             .state_slots =
                 options.max_concurrency + options.context_cache.device_state_slots.value_or(0U)};
         options.stage_layers = models::qwen3_5::default_stage_layers(
-            reader, models::load_options(options), sizing, free_bytes);
+            *reader, models::load_options(options), sizing, free_bytes);
     }
     core::set_wddm_residency_lock_enabled(options.wddm_evictable_budget);
     StartupPhaseScope binding(options.startup_observer, StartupPhase::TargetPlan);
-    auto plan = models::qwen3_5::plan_load(reader, models::load_options(options));
+    auto plan = models::qwen3_5::plan_load(*reader, models::load_options(options));
     binding.complete();
     auto model =
-        models::qwen3_5::materialize_model(std::move(plan), device, &options.startup_observer);
+        models::qwen3_5::materialize_model(std::move(plan), device, &options.startup_observer,
+                                         options.enable_model_suspend ? reader : nullptr);
     device.synchronize();
     StartupPhaseScope frontend(options.startup_observer, StartupPhase::FrontendInitialize);
     auto instance = std::make_unique<ModelInstance>(std::move(model), options);
@@ -586,7 +591,7 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext& 
     std::uint64_t parameters   = 0;
     std::uint64_t weight_bytes = 0;
     std::set<std::string> tensor_formats;
-    for (const auto& object : reader.directory().objects) {
+    for (const auto& object : reader->directory().objects) {
         const auto* tensor = std::get_if<artifact::TensorObject>(&object);
         if (tensor == nullptr) { continue; } // Non-weight resources (tokenizer, templates).
         std::uint64_t elements = 1;

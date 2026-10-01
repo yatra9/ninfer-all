@@ -106,11 +106,15 @@ public:
     [[nodiscard]] EvictableWeightPool* weight_pool() const noexcept { return pool_.get(); }
 
     [[nodiscard]] const MaterializationStats& stats() const noexcept { return stats_; }
+    void retain_restore_source(std::shared_ptr<const Reader> reader, MaterializationPlan plan);
+    [[nodiscard]] std::size_t physical_bytes() const noexcept;
+    void detach_backing();
+    [[nodiscard]] MaterializationStats restore_backing(DeviceContext& device);
 
 private:
     friend MaterializedArtifact materialize(const Reader&, MaterializationPlan&&, DeviceContext&,
                                             const StartupObserver*,
-                                            std::unique_ptr<EvictableWeightPool>);
+                                            std::unique_ptr<EvictableWeightPool>, bool);
 
     struct ObjectStorage {
         std::optional<WeightParent> device;
@@ -120,6 +124,8 @@ private:
     };
 
     // The pool owns the physical memory behind a pool-backed arena; destroy the arena first.
+    std::shared_ptr<const Reader> restore_reader_;
+    std::optional<MaterializationPlan> restore_plan_;
     std::unique_ptr<EvictableWeightPool> pool_;
     // One arena per pipeline rank, allocated on that rank's device. Index 0 is the primary device;
     // a single-device load holds exactly one entry, which is the only one an offload-free model
@@ -135,6 +141,12 @@ private:
 [[nodiscard]] MaterializedArtifact
 materialize(const Reader& reader, MaterializationPlan&& plan, DeviceContext& device,
             const StartupObserver* startup_observer      = nullptr,
-            std::unique_ptr<EvictableWeightPool> backing = nullptr);
+            std::unique_ptr<EvictableWeightPool> backing = nullptr, bool suspendable = false);
+
+// Uses the same coalesced direct-read, staging, transcode and transfer path as initial load.
+// The caller owns destinations and excludes execution until the upload completes.
+[[nodiscard]] MaterializationStats upload_device_materialization(
+    const Reader& reader, const MaterializationPlan& plan, std::span<const DeviceSpan> destinations,
+    DeviceContext& device, const StartupObserver* startup_observer = nullptr);
 
 } // namespace ninfer::artifact

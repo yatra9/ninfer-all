@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -169,18 +170,10 @@ std::span<const std::byte> MaterializedArtifact::pinned_block() const noexcept {
 
 MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& plan,
                                  DeviceContext& device, const StartupObserver* startup_observer,
-                                 std::unique_ptr<EvictableWeightPool> backing) {
+                                 std::unique_ptr<EvictableWeightPool> backing, bool suspendable) {
     if (plan.source != &reader || plan.object_count != reader.directory().objects.size()) {
         throw ArtifactError("materialization plan belongs to another load session");
     }
-    const StartupObserver no_observer;
-    const auto& observer = startup_observer ? *startup_observer : no_observer;
-    std::uint64_t total  = 0;
-    for (const auto& placement : plan.device_objects) {
-        total = checked_add(total, placement.bytes, "device payload bytes");
-    }
-    StartupPhaseScope phase(observer, StartupPhase::WeightsMaterialize, StartupProgressUnit::Bytes,
-                            total);
     MaterializedArtifact out;
     out.objects_.resize(plan.object_count);
     out.stats_.file_bytes            = reader.file_bytes();
@@ -212,7 +205,7 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
             // Each rank's arena must live in that rank's memory, so it is allocated while that
             // device is current.
             const ScopedRank bound(device, rank);
-            out.arenas_[rank] = std::make_unique<DeviceArena>(static_cast<std::size_t>(capacity));
+            out.arenas_[rank] = std::make_unique<DeviceArena>(static_cast<std::size_t>(capacity), suspendable);
         }
         // Plan offsets are authoritative: an evictable tail starts at an aligned boundary that a
         // bump allocator would not reproduce. The arena accounts the whole planned extent.
@@ -279,8 +272,6 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
             storage.host = WeightParent{geometry, storage.host_data.data(), divisor};
         }
     }
-    std::vector<std::vector<CopyRange>> ranges_by_rank(rank_count);
-    std::vector<const DevicePlacement*> transcoded;
     std::vector<std::uint64_t> previous_device_end(rank_count, 0);
     for (const auto& placement : plan.device_objects) {
         const auto& stored_geometry = reader.geometry(placement.object);
@@ -300,7 +291,8 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
             throw ArtifactError("invalid or duplicate device placement");
         }
         if (placement.offset < previous_device_end[placement.rank] || placement.alignment == 0 ||
-            placement.offset % placement.alignment != 0 || placement.offset > rank_capacity ||
+            placement.offset % placement.alignment != 0 ||
+            reinterpret_cast<std::uintptr_t>(arena->base()) % placement.alignment != 0 || placement.offset > rank_capacity ||
             placement.bytes > rank_capacity - placement.offset) {
             throw ArtifactError("device offset differs from materialization plan");
         }
@@ -312,6 +304,101 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                                  : read_divisor(reader, placement.object, geometry, {}, out.stats_);
         object.device = WeightParent{geometry, static_cast<const std::byte*>(storage.data),
                                      divisor, stored_geometry.format};
+    }
+    std::vector<DeviceSpan> destinations;
+    for (const auto& arena : out.arenas_) {
+        destinations.push_back(arena ? DeviceSpan{arena->base(), arena->capacity()} : DeviceSpan{});
+    }
+    const auto uploaded = upload_device_materialization(reader, plan, destinations, device, startup_observer);
+    out.stats_.read_bytes = checked_add(out.stats_.read_bytes, uploaded.read_bytes, "upload reads");
+    out.stats_.h2d_bytes = uploaded.h2d_bytes;
+    out.stats_.upload_seconds = uploaded.upload_seconds;
+    out.stats_.peak_staging_bytes = uploaded.peak_staging_bytes;
+    return out;
+}
+
+
+void MaterializedArtifact::retain_restore_source(std::shared_ptr<const Reader> reader,
+                                                MaterializationPlan plan) {
+    if (!reader || reader.get() != plan.source || arenas_.size() != 1) {
+        throw ArtifactError("invalid single-device restore source");
+    }
+    plan.host_objects.clear();
+    plan.pinned_objects.clear();
+    reader->capture_source_identity();
+    restore_reader_ = std::move(reader);
+    restore_plan_ = std::move(plan);
+}
+
+std::size_t MaterializedArtifact::physical_bytes() const noexcept {
+    if (pool_) { return pool_->physical_bytes(); }
+    std::size_t total = 0;
+    for (const auto& arena : arenas_) { if (arena) { total += arena->physical_bytes(); } }
+    return total;
+}
+void MaterializedArtifact::detach_backing() {
+    if (!restore_plan_) { throw ArtifactError("weight suspend is not enabled"); }
+    if (pool_) { pool_->detach_backing(); }
+    else if (arenas_[0]) { arenas_[0]->detach_backing(); }
+}
+MaterializationStats MaterializedArtifact::restore_backing(DeviceContext& device) {
+    if (!restore_plan_) { throw ArtifactError("weight suspend is not enabled"); }
+    restore_reader_->verify_source_unchanged();
+    if (pool_) { pool_->attach_backing(); }
+    else if (arenas_[0]) { arenas_[0]->attach_backing(); }
+    const std::array<DeviceSpan, 1> destinations{
+        arenas_[0] ? DeviceSpan{arenas_[0]->base(), arenas_[0]->capacity()} : DeviceSpan{}};
+    return upload_device_materialization(*restore_reader_, *restore_plan_, destinations, device);
+}
+
+MaterializationStats upload_device_materialization(
+    const Reader& reader, const MaterializationPlan& plan, std::span<const DeviceSpan> destinations,
+    DeviceContext& device, const StartupObserver* startup_observer) {
+    if (plan.source != &reader || plan.object_count != reader.directory().objects.size() ||
+        destinations.size() != plan.device_rank_count()) {
+        throw ArtifactError("upload plan or destination does not belong to this load session");
+    }
+    const std::size_t rank_count = plan.device_rank_count();
+    MaterializationStats stats;
+    const StartupObserver no_observer;
+    const auto& observer = startup_observer ? *startup_observer : no_observer;
+    std::uint64_t total  = 0;
+    for (const auto& placement : plan.device_objects) {
+        total = checked_add(total, placement.bytes, "device payload bytes");
+    }
+    StartupPhaseScope phase(observer, StartupPhase::WeightsMaterialize, StartupProgressUnit::Bytes,
+                            total);
+    std::vector<std::vector<CopyRange>> ranges_by_rank(rank_count);
+    std::vector<const DevicePlacement*> transcoded;
+    std::vector<bool> seen(plan.object_count);
+    std::vector<std::uint64_t> previous_device_end(rank_count, 0);
+    for (const auto& placement : plan.device_objects) {
+        const auto& stored_geometry = reader.geometry(placement.object);
+        const auto geometry =
+            placement.transcode
+                ? weight_geometry(*placement.transcode, QuantLayout::RowSplit,
+                                  reader.directory().tensor(placement.object).shape)
+                : stored_geometry;
+        reader.validate_object(placement.object);
+        if (seen.at(placement.object.index)) { throw ArtifactError("duplicate device placement"); }
+        seen[placement.object.index] = true;
+        if (placement.rank >= rank_count) {
+            throw ArtifactError("device placement names a rank the plan has no arena for");
+        }
+        const auto& arena    = destinations[placement.rank];
+        const auto rank_capacity = plan.device_capacity(placement.rank);
+        if (!arena.data || arena.bytes < rank_capacity || geometry.bytes != placement.bytes) {
+            throw ArtifactError("invalid or duplicate device placement");
+        }
+        if (placement.offset < previous_device_end[placement.rank] || placement.alignment == 0 ||
+            placement.offset % placement.alignment != 0 ||
+            reinterpret_cast<std::uintptr_t>(arena.data) % placement.alignment != 0 || placement.offset > rank_capacity ||
+            placement.bytes > rank_capacity - placement.offset) {
+            throw ArtifactError("device offset differs from materialization plan");
+        }
+        previous_device_end[placement.rank] = placement.offset + placement.bytes;
+        const DeviceSpan storage{static_cast<std::byte*>(arena.data) + placement.offset,
+                                 static_cast<std::size_t>(placement.bytes)};
         if (placement.transcode) {
             transcoded.push_back(&placement);
             continue;
@@ -330,20 +417,20 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
     std::uint64_t transcoded_bytes = 0;
     for (const DevicePlacement* placement : transcoded) {
         const auto source = reader.read_object(placement->object);
-        out.stats_.read_bytes =
-            checked_add(out.stats_.read_bytes, source.size(), "transcode read bytes");
+        stats.read_bytes =
+            checked_add(stats.read_bytes, source.size(), "transcode read bytes");
         std::vector<std::byte> encoded(static_cast<std::size_t>(placement->bytes));
         transcode_row_split(*placement->transcode,
                             reader.directory().tensor(placement->object).shape, source, encoded);
-        const auto& parent = *out.objects_.at(placement->object.index).device;
+        const auto destination = static_cast<std::byte*>(destinations[placement->rank].data) + placement->offset;
         const ScopedRank bound(device, placement->rank);
-        check_cuda(cudaMemcpy(const_cast<std::byte*>(parent.data), encoded.data(), encoded.size(),
+        check_cuda(cudaMemcpy(destination, encoded.data(), encoded.size(),
                               cudaMemcpyHostToDevice),
                    "upload transcoded weight bytes");
         transcoded_bytes = checked_add(transcoded_bytes, encoded.size(), "transcoded bytes");
         phase.progress(transcoded_bytes, total);
     }
-    out.stats_.h2d_bytes = transcoded_bytes;
+    stats.h2d_bytes = transcoded_bytes;
     std::uint64_t copied = 0;
     const auto start     = std::chrono::steady_clock::now();
     bool uploaded_any    = false;
@@ -388,8 +475,8 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
         std::vector<std::unique_ptr<Slot>> slots;
         // Passes run one after another and free their slots in between, so the process high-water
         // mark is the largest pass, not their sum.
-        out.stats_.peak_staging_bytes =
-            std::max<std::uint64_t>(out.stats_.peak_staging_bytes, slot_bytes * slot_count);
+        stats.peak_staging_bytes =
+            std::max<std::uint64_t>(stats.peak_staging_bytes, slot_bytes * slot_count);
         StartupPhaseScope pin_phase(observer, StartupPhase::WeightsStagingPin,
                                     StartupProgressUnit::Bytes, slot_bytes * slot_count);
         for (std::size_t i = 0; i < slot_count; ++i) {
@@ -411,7 +498,7 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                 if (received < std::min<std::uint64_t>(request, remaining)) {
                     throw ArtifactError("direct read ended before the required payload");
                 }
-                out.stats_.read_bytes = checked_add(out.stats_.read_bytes, received, "read bytes");
+                stats.read_bytes = checked_add(stats.read_bytes, received, "read bytes");
                 const auto chunk_end  = checked_add(source, received, "read block end");
                 while (next_range < ranges.size() && ranges[next_range].file == span.file &&
                        ranges[next_range].begin < chunk_end) {
@@ -442,16 +529,16 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
     }
     if (!uploaded_any) {
         phase.complete(transcoded_bytes, total);
-        return out;
+        return stats;
     }
     if (checked_add(copied, transcoded_bytes, "uploaded bytes") != total) {
         throw ArtifactError("incomplete device upload");
     }
-    out.stats_.h2d_bytes = checked_add(copied, transcoded_bytes, "uploaded bytes");
-    out.stats_.upload_seconds =
+    stats.h2d_bytes = checked_add(copied, transcoded_bytes, "uploaded bytes");
+    stats.upload_seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     phase.complete(checked_add(copied, transcoded_bytes, "uploaded bytes"), total);
-    return out;
+    return stats;
 }
 
 } // namespace ninfer::artifact

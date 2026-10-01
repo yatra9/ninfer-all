@@ -307,6 +307,11 @@ weight full mirror は保持しない。実装前に max context 160K の実設�
 
 ### 7.2 `.ninfer` artifact を restore source にする
 
+復帰元のentryと使用したmultipart continuationはEngineの存続中に変更・置換しない。
+Readerとdevice placementをModel側で保持し、resume前にファイルサイズと更新時刻を確認する。
+既存のframing・object geometry・range検証を再利用し、source変更、missing file、read errorを
+復帰失敗として扱う。任意のpayload破損を検出するための全量hashや追加の全量readはv1では行わない。
+
 `.ninfer` は実行用 layout に量子化 / packing 済み tensor payload を保持している。
 
 現行 materializer は以下を既に実装している。

@@ -567,6 +567,9 @@ I/O 层可将这些段继续切成传输块，按原偏移写入同一个目标�
 Materializer 按实际使用的 parent 去重，安排 device/host backing，再取得 typed view。
 辅助 scalar、索引等需要 owning Host 值的用途可以按 Binding 读取对应元素区间，保持其数值类型。
 Reader 的 JSON 与符号索引用于冷加载，运行时使用解析后的引用与直接调用。
+当 Model 为显式 suspend 保留 Reader 作为恢复源时，入口及已读取续卷在 Engine 生命周期内必须保持不变。
+恢复前检查这些文件的长度与更新时间，并继续使用同一 Reader 的已验证 framing 和范围映射；
+缺失、修改或读取失败均拒绝恢复。该约定不增加完整 weight 的 Host mirror 或每次全量预读。
 
 ### 11.3 语义与支持检查
 

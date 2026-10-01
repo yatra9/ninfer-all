@@ -218,7 +218,10 @@ GenerationCore 或 CausalScoreCore 在实例准备完成后使用它。
 
 模型配置、绑定和权重地址在实例存活期间固定；每个 Program 独占自己的可变 State/KV、
 workspace 和 Graph。销毁时先结束 Engine core 和未决设备工作，再销毁实例的 Program、
-Frontend 和 Parameters，最后释放 Model backing。Reader 与上传 staging 属于加载生命周期。
+Frontend 和 Parameters，最后释放 Model backing。默认情况下 Reader 与上传 staging 属于加载生命周期。
+启用 model suspend 时，Model backing 保留地址稳定的 Reader 和仅含 Device placement 的恢复计划；
+Host/Pinned payload 不重复保留。恢复复用初次加载的范围合并、staging、transcode 和上传实现，
+写入原有 Device destination，既有 parent、binding 与 Parameters 不重建。
 
 权重、State/KV backing、block-table matrices、workspace 与 CUDA Graph resources 在 Engine 开始接受请求前
 建立。运行期改变 ownership、mapping、frontier 与 replica placement，但不重建这些大块 Device allocations。

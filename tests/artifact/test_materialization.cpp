@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -25,6 +26,106 @@ namespace {
 using namespace ninfer;
 using namespace ninfer::artifact;
 using namespace ninfer::test::artifact_fixture;
+
+void suspend_restore(DeviceContext& device) {
+    if (!EvictableWeightPool::supported(device)) { return; }
+    for (const bool overlay : {false, true}) {
+        Fixture fixture;
+        fixture.write(true);
+        auto reader = std::make_shared<Reader>(fixture.entry);
+        Binder binder(*reader);
+        (void)binder.parameter("matrix", {2, 130});
+        const auto divisor = reader->find("divisors");
+        binder.require_device(divisor);
+        const auto resource = binder.resource("text", "tokenizer.json");
+        if (overlay) { binder.evict_device(divisor, 1); }
+        auto plan = std::move(binder).finish(overlay ? EvictableWeightPool::kChunkBytes : 256);
+        std::unique_ptr<EvictableWeightPool> pool;
+        if (overlay) {
+            pool = std::make_unique<EvictableWeightPool>(device, EvictableWeightPool::Config{
+                .arena_bytes = static_cast<std::size_t>(plan.device_capacity()),
+                .evictable_tail_bytes = static_cast<std::size_t>(plan.evictable_tail_bytes)});
+        }
+        auto backing = materialize(*reader, MaterializationPlan(plan), device, nullptr, std::move(pool), true);
+        const auto quantized = reader->find("q5");
+        const auto* address = backing.device_parent(quantized).data;
+        const auto host = backing.host_bytes(resource);
+        std::vector<std::byte> expected(528), restored(528);
+        CUDA_CHECK(cudaMemcpy(expected.data(), address, expected.size(), cudaMemcpyDeviceToHost));
+        backing.retain_restore_source(reader, std::move(plan));
+        DeviceBuffer output(8);
+        cudaGraph_t graph = nullptr;
+        cudaGraphExec_t execution = nullptr;
+        CUDA_CHECK(cudaStreamBeginCapture(device.stream, cudaStreamCaptureModeGlobal));
+        CUDA_CHECK(cudaMemcpyAsync(output.p, address, 8, cudaMemcpyDeviceToDevice, device.stream));
+        CUDA_CHECK(cudaStreamEndCapture(device.stream, &graph));
+        CUDA_CHECK(cudaGraphInstantiate(&execution, graph, nullptr, nullptr, 0));
+        for (int cycle = 0; cycle < 10; ++cycle) {
+            device.synchronize();
+            backing.detach_backing();
+            require(backing.physical_bytes() == 0, "weight backing stayed allocated");
+            const auto upload = backing.restore_backing(device);
+            require(upload.h2d_bytes == 536 && backing.device_parent(quantized).data == address,
+                    "weight restore changed bindings or omitted bytes");
+            require(backing.host_bytes(resource).data() == host.data(), "Host resources were recreated");
+            CUDA_CHECK(cudaMemcpy(restored.data(), address, restored.size(), cudaMemcpyDeviceToHost));
+            require(restored == expected, "multipart weight restore changed bytes");
+            CUDA_CHECK(cudaGraphLaunch(execution, device.stream));
+            device.synchronize();
+            std::array<std::byte, 8> result{};
+            output.copy_to_host(result.data(), result.size());
+            require(std::equal(result.begin(), result.end(), expected.begin()), "existing graph failed after weight restore");
+        }
+        CUDA_CHECK(cudaGraphExecDestroy(execution));
+        CUDA_CHECK(cudaGraphDestroy(graph));
+        backing.detach_backing();
+        std::filesystem::last_write_time(fixture.entry,
+            std::filesystem::last_write_time(fixture.entry) + std::chrono::seconds(2));
+        rejects([&] { (void)backing.restore_backing(device); }, "changed restore source was accepted");
+        require(backing.physical_bytes() == 0, "changed source attached backing before validation");
+    }
+}
+
+void transcode_suspend_restore(DeviceContext& device) {
+    if (!EvictableWeightPool::supported(device)) { return; }
+    for (const auto target : {QType::Q4_G64_FP16, QType::Q6_G64_FP16}) {
+        Fixture fixture;
+        const std::array<std::uint64_t, 2> shape{2, 128};
+        const auto geometry = weight_geometry(QType::Q8_G32_FP16, QuantLayout::RowSplit, shape);
+        fixture.payload.assign(geometry.bytes, std::byte{});
+        for (std::size_t i = 0; i < geometry.code_bytes; ++i) { fixture.payload[i] = std::byte(i % 17); }
+        for (std::size_t i = 0; i < geometry.scale_bytes; i += 2) {
+            put_word(fixture.payload, geometry.scale_offset + i, 0x3c00, 2);
+        }
+        fixture.root = {{"components", {{"text", {{"config", Json::object()}}}}},
+            {"objects", Json::array({{{"id", "matrix"}, {"kind", "tensor"}, {"shape", {2, 128}},
+                {"format", "q8_g32_fp16"}, {"layout", "row_split_k128_v1"}, {"offset", 0}, {"bytes", geometry.bytes}}})},
+            {"bindings", {{"matrix", {{"object", "matrix"}}}}}, {"uses", Json::array()},
+            {"files", Json::array({{{"path", nullptr}, {"payload_bytes", geometry.bytes}}})}};
+        fixture.write();
+        auto reader = std::make_shared<Reader>(fixture.entry);
+        Binder binder(*reader);
+        const auto object = reader->find("matrix");
+        binder.require_device(object);
+        binder.transcode_device(object, target);
+        auto plan = std::move(binder).finish();
+        DeviceArena destination(plan.device_capacity());
+        const std::array<DeviceSpan, 1> too_small{DeviceSpan{destination.base(), 1}};
+        rejects([&] { (void)upload_device_materialization(*reader, plan, too_small, device); },
+                "undersized existing upload destination was accepted");
+        auto backing = materialize(*reader, MaterializationPlan(plan), device, nullptr, nullptr, true);
+        const auto& parent = backing.device_parent(object);
+        std::vector<std::byte> expected(parent.geometry.bytes), actual(expected.size());
+        CUDA_CHECK(cudaMemcpy(expected.data(), parent.data, expected.size(), cudaMemcpyDeviceToHost));
+        backing.retain_restore_source(reader, std::move(plan));
+        device.synchronize();
+        backing.detach_backing();
+        const auto stats = backing.restore_backing(device);
+        CUDA_CHECK(cudaMemcpy(actual.data(), parent.data, actual.size(), cudaMemcpyDeviceToHost));
+        require(actual == expected && stats.h2d_bytes == expected.size() && stats.read_bytes == geometry.bytes,
+                "transcoded weight restore differs from startup representation");
+    }
+}
 
 void materialization(DeviceContext& device) {
     Fixture fixture;
@@ -384,6 +485,8 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("expected [--artifact|--writer-fixture PATH]");
         }
         materialization(device);
+        suspend_restore(device);
+        transcode_suspend_restore(device);
         failure_and_host_only(device);
         overlay_placement(device);
         pipeline_rank_placement();

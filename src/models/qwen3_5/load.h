@@ -37,7 +37,7 @@ private:
     explicit LoadPlan(std::unique_ptr<Impl> impl);
     friend LoadPlan plan_load(const artifact::Reader&, LoadOptions);
     friend std::unique_ptr<Model> materialize_model(LoadPlan&&, DeviceContext&,
-                                                    const StartupObserver*);
+                                                    const StartupObserver*, std::shared_ptr<const artifact::Reader>);
 };
 
 [[nodiscard]] LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options = {});
@@ -60,7 +60,8 @@ struct StageSizing {
                                                               const StageSizing& sizing,
                                                               std::span<const std::uint64_t> free_bytes);
 [[nodiscard]] std::unique_ptr<Model> materialize_model(LoadPlan&& plan, DeviceContext& device,
-                                                       const StartupObserver* observer = nullptr);
+                                                       const StartupObserver* observer = nullptr,
+                                                       std::shared_ptr<const artifact::Reader> source_owner = {});
 [[nodiscard]] std::unique_ptr<Model> load_model(const std::filesystem::path& path,
                                                 LoadOptions options, DeviceContext& device,
                                                 const StartupObserver* observer = nullptr);

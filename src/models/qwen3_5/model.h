@@ -57,6 +57,11 @@ public:
     [[nodiscard]] const artifact::MaterializationStats& storage_stats() const noexcept {
         return backing_.stats();
     }
+    [[nodiscard]] std::size_t weight_device_bytes() const noexcept { return backing_.physical_bytes(); }
+    void detach_weights() { backing_.detach_backing(); }
+    [[nodiscard]] artifact::MaterializationStats restore_weights(DeviceContext& device) {
+        return backing_.restore_backing(device);
+    }
 
     // Overlay Vision residency only: the pinned tower groups, the pinned block that holds them and
     // the eviction pool behind the weight arena. The pool is shared mutable device state; its
@@ -80,7 +85,7 @@ public:
 
 private:
     friend std::unique_ptr<Model> materialize_model(LoadPlan&&, DeviceContext&,
-                                                    const StartupObserver*);
+                                                    const StartupObserver*, std::shared_ptr<const artifact::Reader>);
     Model(Config config, LoadOptions options, ModelWeights weights, std::vector<BoundWeight> bound,
           FrontendResources resources, InstanceInfo info, artifact::MaterializedArtifact backing,
           std::optional<VisionOverlayLayout> vision_overlay,
