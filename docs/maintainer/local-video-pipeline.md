@@ -137,9 +137,12 @@ geometry directly from the reusable complete index. It enforces the same selecti
 limits as the reader and performs no RGB conversion. A later frontend checkpoint will transform
 this result into model-specific temporal groups and token counts.
 
-The lightweight frame index may be cached across requests using canonical path plus file identity
-and modification facts. A failed or cancelled scan is not published. This cache is independent of
-prompt prefix reuse. The first implementation marks local-video prompt identity non-reusable,
+The frontend keeps up to eight `VideoSource` entries in an LRU cache keyed by canonical path,
+file size, and modification time. An unchanged path reuses its completed frame index across
+requests. A changed file publishes a new source; active requests retain the old source and its
+unchanged checks reject mutation safely. Eviction drops only the cache reference, so it cannot
+invalidate an active reader. A failed or cancelled scan is not published by `VideoSource`.
+This cache is independent of prompt prefix reuse. The first implementation marks local-video prompt identity non-reusable,
 because path and modification metadata are not a content digest and pixels are materialized after
 prompt preparation. A later strong content identity requires a separate contract and validation.
 

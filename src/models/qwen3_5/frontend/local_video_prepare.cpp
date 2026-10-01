@@ -31,6 +31,55 @@ std::size_t checked_elements(std::size_t patches) {
 
 } // namespace
 
+struct LocalVideoSourceCache::Entry {
+    std::filesystem::path path;
+    std::uintmax_t size = 0;
+    std::filesystem::file_time_type modified;
+    std::uint64_t last_use = 0;
+    std::shared_ptr<media::local_video::VideoSource> source;
+};
+
+LocalVideoSourceCache::LocalVideoSourceCache(std::size_t maximum_entries)
+    : maximum_entries_(maximum_entries) {
+    if (maximum_entries_ == 0) {
+        throw std::invalid_argument("local video source cache must retain at least one entry");
+    }
+    entries_.reserve(maximum_entries_);
+}
+
+LocalVideoSourceCache::~LocalVideoSourceCache() = default;
+
+std::shared_ptr<media::local_video::VideoSource>
+LocalVideoSourceCache::acquire(const std::filesystem::path& path) {
+    const std::uintmax_t size = std::filesystem::file_size(path);
+    const auto modified = std::filesystem::last_write_time(path);
+    std::lock_guard lock(mutex_);
+    ++clock_;
+    for (Entry& entry : entries_) {
+        if (entry.path == path && entry.size == size && entry.modified == modified) {
+            entry.last_use = clock_;
+            return entry.source;
+        }
+    }
+    auto source = std::make_shared<media::local_video::VideoSource>(path);
+    Entry replacement{path, size, modified, clock_, source};
+    auto stale = std::find_if(entries_.begin(), entries_.end(), [&](const Entry& entry) {
+        return entry.path == path;
+    });
+    if (stale != entries_.end()) {
+        *stale = std::move(replacement);
+    } else if (entries_.size() < maximum_entries_) {
+        entries_.push_back(std::move(replacement));
+    } else {
+        auto oldest = std::min_element(entries_.begin(), entries_.end(),
+                                       [](const Entry& a, const Entry& b) {
+                                           return a.last_use < b.last_use;
+                                       });
+        *oldest = std::move(replacement);
+    }
+    return source;
+}
+
 struct LocalVideoPayloadReader::Impl {
     const PreparedLocalVideoInput* input = nullptr;
     media::local_video::VideoReader reader;
@@ -120,7 +169,8 @@ LocalVideoPayloadReader::read_chunk(std::size_t chunk_index) {
 PreparedLocalVideoInput
 prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl& control,
                           std::uint64_t maximum_total_tokens,
-                          std::uint64_t maximum_chunk_tokens) {
+                          std::uint64_t maximum_chunk_tokens,
+                          const std::shared_ptr<LocalVideoSourceCache>& source_cache) {
     check_preparation_control(control, "local video planning");
     std::shared_ptr<media::local_video::VideoSource> source;
     media::local_video::Options options;
@@ -139,7 +189,8 @@ prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl
     media::local_video::VideoPlan video;
     LocalVideoPromptPlan prompt;
     try {
-        source = std::make_shared<media::local_video::VideoSource>(input.path);
+        source = source_cache ? source_cache->acquire(input.path)
+                              : std::make_shared<media::local_video::VideoSource>(input.path);
         video = source->plan(options);
         prompt = plan_local_video_prompt(video.width, video.height, video.selected_frames,
                                          maximum_total_tokens, maximum_chunk_tokens);

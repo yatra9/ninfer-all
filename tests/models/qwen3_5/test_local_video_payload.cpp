@@ -69,7 +69,8 @@ void run(const std::filesystem::path& path) {
     ninfer::OwnedLocalVideo input;
     input.path = path;
     input.deinterlace = ninfer::LocalVideoDeinterlace::Off;
-    auto prepared = fi::prepare_local_video_input(input, {}, 24, 12);
+    auto source_cache = std::make_shared<fi::LocalVideoSourceCache>(2);
+    auto prepared = fi::prepare_local_video_input(input, {}, 24, 12, source_cache);
 
     expect(prepared.prompt.width == 96 && prepared.prompt.height == 64,
            "prepared dimensions follow the fixture rather than a fixed resolution");
@@ -114,6 +115,13 @@ void run(const std::filesystem::path& path) {
     const auto stats = prepared.source->source_stats();
     expect(stats.index_builds == 1, "planning builds the source index once");
     expect(stats.index_reuses >= 2, "reference and payload readers reuse the prepared index");
+
+    auto repeated = fi::prepare_local_video_input(input, {}, 24, 12, source_cache);
+    expect(repeated.source == prepared.source,
+           "a later request reuses the cached source for the unchanged path");
+    expect(repeated.source->source_stats().index_builds == 1 &&
+               repeated.source->source_stats().index_reuses > stats.index_reuses,
+           "a later request reuses rather than rebuilds the completed index");
 
     std::atomic<unsigned> checkpoints{0};
     ninfer::PreparationControl cancelled{

@@ -835,9 +835,10 @@ EncodedChat encode_rendered_chat(const Tokenizer& tokenizer, const RenderedChat&
 }
 
 Processor::Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& chat_template,
-                     ProcessorOptions options, std::shared_ptr<MediaPreprocessCache> media_cache)
+                     ProcessorOptions options, std::shared_ptr<MediaPreprocessCache> media_cache,
+                     std::shared_ptr<LocalVideoSourceCache> local_video_cache)
     : tokenizer_(tokenizer), chat_template_(chat_template), options_(std::move(options)),
-      media_cache_(std::move(media_cache)) {
+      media_cache_(std::move(media_cache)), local_video_cache_(std::move(local_video_cache)) {
     if (options_.max_encoded_media_bytes == 0 || options_.max_decoded_pixels == 0 ||
         options_.max_decoded_video_pixels == 0 || options_.max_raw_patches == 0 ||
         options_.max_vision_tokens == 0 || options_.image_min_pixels == 0 ||
@@ -885,7 +886,7 @@ std::size_t Processor::count_tokens(std::vector<ChatMessage> messages,
 #else
                 PreparedLocalVideoInput local = prepare_local_video_input(
                     *part->media.local_video, control, options_.max_local_video_tokens,
-                    options_.max_vision_execution_tokens);
+                    options_.max_vision_execution_tokens, local_video_cache_);
                 VisionItem item = local_video_item(local.prompt);
                 if (local.prompt.total_tokens >
                     options_.max_local_video_tokens - local_video_tokens) {
@@ -1005,7 +1006,8 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
                 planned_local_videos[part_index] = std::make_shared<PreparedLocalVideoInput>(
                     prepare_local_video_input(*part->media.local_video, worker_control,
                                               options_.max_local_video_tokens,
-                                              options_.max_vision_execution_tokens));
+                                              options_.max_vision_execution_tokens,
+                                              local_video_cache_));
                 pending_items.emplace_back();
                 continue;
 #endif

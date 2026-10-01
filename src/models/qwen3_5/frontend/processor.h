@@ -20,6 +20,7 @@
 namespace ninfer::models::qwen3_5::frontend {
 
 class MediaPreprocessCache;
+class LocalVideoSourceCache;
 struct PreparedLocalVideoInput;
 
 enum class ProcessorErrorKind {
@@ -152,7 +153,8 @@ encode_rendered_chat(const Tokenizer& tokenizer, const RenderedChat& rendered,
 class Processor {
 public:
     Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& chat_template,
-              ProcessorOptions options, std::shared_ptr<MediaPreprocessCache> media_cache);
+              ProcessorOptions options, std::shared_ptr<MediaPreprocessCache> media_cache,
+              std::shared_ptr<LocalVideoSourceCache> local_video_cache = {});
 
     [[nodiscard]] std::size_t count_tokens(std::vector<ChatMessage> messages,
                                            ChatRenderOptions render_options  = {},
@@ -168,6 +170,7 @@ private:
     const CompiledChatTemplate& chat_template_;
     ProcessorOptions options_;
     std::shared_ptr<MediaPreprocessCache> media_cache_;
+    std::shared_ptr<LocalVideoSourceCache> local_video_cache_;
 };
 
 } // namespace ninfer::models::qwen3_5::frontend

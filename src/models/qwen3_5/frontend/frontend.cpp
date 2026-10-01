@@ -5,6 +5,7 @@
 
 #include "models/qwen3_5/frontend/chat_template.h"
 #include "models/qwen3_5/frontend/media_cache.h"
+#include "models/qwen3_5/frontend/local_video_prepare.h"
 #include "models/qwen3_5/frontend/processor.h"
 #include "models/qwen3_5/frontend/test_access.h"
 #include "models/qwen3_5/frontend/tokenizer.h"
@@ -715,6 +716,7 @@ public:
             media_cache = std::make_shared<fi::MediaPreprocessCache>(
                 options.media_cache_bytes, options.media_live_bytes,
                 options.media_preprocess_threads, static_cast<std::size_t>(minimum_live));
+            local_video_cache = std::make_shared<fi::LocalVideoSourceCache>();
         }
         if (!tokenizer || resources.public_token_count != tokenizer->vocab_size()) {
             throw std::invalid_argument(
@@ -777,6 +779,7 @@ public:
     std::shared_ptr<const fi::Tokenizer> tokenizer;
     fi::ProcessorOptions processor;
     std::shared_ptr<fi::MediaPreprocessCache> media_cache;
+    std::shared_ptr<fi::LocalVideoSourceCache> local_video_cache;
     StopPolicy defaults;
     ModelSamplingDefaults sampling;
     std::shared_ptr<const std::vector<TokenId>> thinking_control_tokens;
@@ -969,7 +972,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
     bool has_local_video = false;
     if (has_media) {
         fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
-                                impl_->media_cache);
+                                impl_->media_cache, impl_->local_video_cache);
         fi::ProcessedInput processed;
         try {
             processed =
@@ -1116,7 +1119,7 @@ std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl
     }
 
     fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
-                            impl_->media_cache);
+                            impl_->media_cache, impl_->local_video_cache);
     try {
         return checked_token_count(
             processor.count_tokens(std::move(messages), render_options(options), control));
