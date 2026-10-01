@@ -2,6 +2,8 @@
 
 #include "media/decode/decode.h"
 #include "models/qwen3_5/frontend/digest.h"
+#include "models/qwen3_5/frontend/local_video_plan.h"
+#include "models/qwen3_5/frontend/local_video_prepare.h"
 #include "models/qwen3_5/frontend/media_cache.h"
 
 #include <algorithm>
@@ -58,6 +60,17 @@ struct Prepared {
     VisionItem item;
     std::shared_ptr<qwen3_5::PreparedMediaPayload> payload;
 };
+
+VisionItem local_video_item(const LocalVideoPromptPlan& plan) {
+    if (plan.timestamps.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        throw std::invalid_argument("local video temporal grid exceeds int range");
+    }
+    VisionItem item;
+    item.modality = Modality::Video;
+    item.grid = {static_cast<int>(plan.timestamps.size()), plan.grid_height, plan.grid_width};
+    item.timestamps = plan.timestamps;
+    return item;
+}
 
 static_assert(kPatchFeatures == static_cast<int>(kPreparedVisionPatchFeatures));
 
@@ -419,6 +432,15 @@ std::size_t validate_media_inputs(std::span<ChatPart* const> parts,
     }
     std::size_t remaining = options.max_encoded_media_bytes;
     for (const ChatPart* part : parts) {
+        if (part->media.local_video) {
+            if (part->kind != ChatPartKind::Video || !part->media.bytes.empty()) {
+                throw std::invalid_argument("local video has inconsistent media storage");
+            }
+            continue;
+        }
+        if (part->media.bytes.empty()) {
+            throw std::invalid_argument("encoded media input contains no bytes");
+        }
         if (part->media.bytes.size() > remaining) {
             throw ProcessorError(ProcessorErrorKind::BudgetExceeded,
                                  "request media bytes exceed processor budget");
@@ -855,7 +877,7 @@ Processor::Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& cha
         options_.video_max_pixels < options_.video_min_pixels || !(options_.video_fps > 0.0) ||
         options_.video_min_frames <= 0 || options_.video_max_frames < options_.video_min_frames ||
         options_.max_video_source_frames < options_.video_max_frames ||
-        !(options_.max_video_duration_seconds > 0.0)) {
+        !(options_.max_video_duration_seconds > 0.0) || options_.max_local_video_tokens == 0) {
         throw std::invalid_argument("processor budgets must be positive");
     }
     if (!media_cache_) { throw std::invalid_argument("processor media cache must not be null"); }
@@ -882,9 +904,30 @@ std::size_t Processor::count_tokens(std::vector<ChatMessage> messages,
     std::vector<VisionItem> items;
     items.reserve(parts.size());
     PreprocessStats stats;
+    PreprocessStats ordinary_stats;
+    std::uint64_t local_video_tokens = 0;
     try {
         for (const ChatPart* part : parts) {
             check_preparation_control(control);
+            if (part->media.local_video) {
+#ifdef _WIN32
+                throw std::invalid_argument("local video is available only in the WSLC build");
+#else
+                PreparedLocalVideoInput local = prepare_local_video_input(
+                    *part->media.local_video, control, options_.max_local_video_tokens,
+                    kMaximumVisionItemTokens);
+                VisionItem item = local_video_item(local.prompt);
+                if (local.prompt.total_tokens >
+                    options_.max_local_video_tokens - local_video_tokens) {
+                    throw ProcessorError(ProcessorErrorKind::BudgetExceeded,
+                                         "local video tokens exceed processor budget");
+                }
+                local_video_tokens += local.prompt.total_tokens;
+                add_budget(stats, item);
+                items.push_back(std::move(item));
+                continue;
+#endif
+            }
             enforce_image_resize_policy(*part, options_, policy);
             VisionItem item = part->kind == ChatPartKind::Image
                                   ? inspect_image_item(part->media.bytes, options_, policy)
@@ -892,8 +935,9 @@ std::size_t Processor::count_tokens(std::vector<ChatMessage> messages,
             PreprocessStats item_stats;
             add_budget(item_stats, item);
             enforce_media_item_resource_limits(item_stats);
+            add_budget(ordinary_stats, item);
+            enforce_media_resource_limits(ordinary_stats, options_);
             add_budget(stats, item);
-            enforce_media_resource_limits(stats, options_);
             items.push_back(std::move(item));
         }
     } catch (const media::decode::Error& error) { throw_decode_error(error); }
@@ -976,12 +1020,26 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
 
     std::vector<PendingMedia> pending_items;
     pending_items.reserve(parts.size());
+    std::vector<std::shared_ptr<PreparedLocalVideoInput>> planned_local_videos(parts.size());
     ConcurrentMediaBudget request_budget(options_);
     std::exception_ptr preparation_error;
     const auto media_phase_started = Clock::now();
-    for (ChatPart* part : parts) {
+    for (std::size_t part_index = 0; part_index < parts.size(); ++part_index) {
+        ChatPart* part = parts[part_index];
         try {
             check_preparation_control(control);
+            if (part->media.local_video) {
+#ifdef _WIN32
+                throw std::invalid_argument("local video is available only in the WSLC build");
+#else
+                planned_local_videos[part_index] = std::make_shared<PreparedLocalVideoInput>(
+                    prepare_local_video_input(*part->media.local_video, worker_control,
+                                              options_.max_local_video_tokens,
+                                              kMaximumVisionItemTokens));
+                pending_items.emplace_back();
+                continue;
+#endif
+            }
             const auto digest =
                 sha256(part->media.bytes, [&control] { check_preparation_control(control); });
             const ChatPartKind kind = part->kind;
@@ -1010,7 +1068,34 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
     }
     MediaCacheRequestStats cache_stats;
     std::size_t patch_cursor = 0;
-    for (PendingMedia& pending : pending_items) {
+    PreprocessStats ordinary_stats;
+    std::uint64_t local_video_tokens = 0;
+    for (std::size_t item_index = 0; item_index < pending_items.size(); ++item_index) {
+        PendingMedia& pending = pending_items[item_index];
+        if (planned_local_videos[item_index]) {
+            const auto& local = planned_local_videos[item_index];
+            VisionItem item = local_video_item(local->prompt);
+            if (local->prompt.total_tokens >
+                options_.max_local_video_tokens - local_video_tokens) {
+                preparation_error = std::make_exception_ptr(ProcessorError(
+                    ProcessorErrorKind::BudgetExceeded,
+                    "local video tokens exceed processor budget"));
+                stop_preparation.store(true, std::memory_order_relaxed);
+                continue;
+            }
+            local_video_tokens += local->prompt.total_tokens;
+            PreprocessStats item_stats;
+            add_budget(item_stats, item);
+            add_budget(stats, item);
+            item.patch_begin = patch_cursor;
+            item.patch_count = static_cast<std::size_t>(item_stats.raw_patches);
+            patch_cursor += item.patch_count;
+            items.push_back(std::move(item));
+            output.media_payloads.push_back(nullptr);
+            output.local_videos.push_back(local);
+            output.has_local_video = true;
+            continue;
+        }
         PreparedMedia media;
         try {
             media = media_cache_->await(pending, preparation_error ? PreparationControl{} : control,
@@ -1041,8 +1126,9 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
             PreprocessStats item_stats;
             add_budget(item_stats, item);
             enforce_media_item_resource_limits(item_stats);
+            add_budget(ordinary_stats, item);
+            enforce_media_resource_limits(ordinary_stats, options_);
             add_budget(stats, item);
-            enforce_media_resource_limits(stats, options_);
         } catch (...) {
             preparation_error = std::current_exception();
             stop_preparation.store(true, std::memory_order_relaxed);
@@ -1051,6 +1137,7 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
         stats.patch_bytes += media.payload->patch_elements * sizeof(std::uint16_t);
         items.push_back(std::move(item));
         output.media_payloads.push_back(std::move(media.payload));
+        output.local_videos.push_back(nullptr);
     }
     for (ChatPart* part : parts) { std::vector<std::uint8_t>().swap(part->media.bytes); }
     if (preparation_error) {
@@ -1058,7 +1145,8 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
             std::rethrow_exception(preparation_error);
         } catch (const media::decode::Error& error) { throw_decode_error(error); }
     }
-    if (patch_cursor != stats.raw_patches || output.media_payloads.size() != items.size()) {
+    if (patch_cursor != stats.raw_patches || output.media_payloads.size() != items.size() ||
+        output.local_videos.size() != items.size()) {
         throw std::logic_error("preprocessed patch count does not match processor budget");
     }
     const double media_preprocess_seconds =
@@ -1084,8 +1172,6 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
     output.message_boundaries          = std::move(encoded.message_boundaries);
     output.cache_boundaries            = std::move(encoded.cache_boundaries);
     stats.prompt_tokens                = output.input_ids.size();
-    enforce_media_resource_limits(stats, options_);
-
     stats.media_cache_hits              = cache_stats.hits;
     stats.media_cache_misses            = cache_stats.misses;
     stats.media_singleflight_waits      = cache_stats.singleflight_waits;

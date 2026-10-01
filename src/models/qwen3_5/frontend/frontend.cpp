@@ -273,6 +273,16 @@ std::vector<fi::ChatMessage> convert_messages(std::vector<ChatMessage> messages)
                 target.parts.push_back(fi::ChatPart::text_part(std::move(part.text)));
                 break;
             case MessagePartKind::Media: {
+                if (part.media.local_video) {
+                    if (part.media.kind != MediaKind::Video || !part.media.bytes.empty()) {
+                        throw std::invalid_argument(
+                            "frontend local video input has inconsistent media storage");
+                    }
+                    fi::MediaData media;
+                    media.local_video = std::move(part.media.local_video);
+                    target.parts.push_back(fi::ChatPart::video(std::move(media)));
+                    break;
+                }
                 if (part.media.bytes.empty()) {
                     throw std::invalid_argument("frontend media input contains no owning bytes");
                 }
@@ -952,6 +962,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
     }
     std::vector<std::optional<std::uint32_t>> message_boundaries;
     std::vector<std::optional<std::uint32_t>> cache_boundaries;
+    bool has_local_video = false;
     if (has_media) {
         fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
                                 impl_->media_cache);
@@ -967,6 +978,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         result.positions           = std::move(processed.positions);
         result.rope_delta          = processed.rope_delta;
         result.media_payloads      = std::move(processed.media_payloads);
+        result.local_videos        = std::move(processed.local_videos);
         result.vision_items.reserve(processed.vision_items.size());
         for (fi::VisionItem& item : processed.vision_items) {
             result.vision_items.push_back(convert_vision_item(std::move(item)));
@@ -989,6 +1001,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         result.identity.rewrite_checkpoint = processed.rewrite_checkpoint;
         result.identity.rewrite_execution_frontiers =
             std::move(processed.rewrite_execution_frontiers);
+        has_local_video = processed.has_local_video;
         message_boundaries = std::move(processed.message_boundaries);
         cache_boundaries   = std::move(processed.cache_boundaries);
     } else {
@@ -1065,7 +1078,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
             }
         }
     }
-    result.identity.reusable = true;
+    result.identity.reusable = !has_local_video;
     result.tap_hints         = prepare_tap_hints(cache_hints, message_boundaries, cache_boundaries,
                                                  engine_tool_marker_index, leading_boundary,
                                                  result.identity.rewrite_checkpoint);

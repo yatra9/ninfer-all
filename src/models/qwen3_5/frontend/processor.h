@@ -20,6 +20,7 @@
 namespace ninfer::models::qwen3_5::frontend {
 
 class MediaPreprocessCache;
+struct PreparedLocalVideoInput;
 
 enum class ProcessorErrorKind {
     BudgetExceeded,
@@ -96,6 +97,7 @@ struct ProcessorOptions {
     double video_fps                       = 2.0;
     int video_min_frames                   = 4;
     int video_max_frames                   = 768;
+    std::uint64_t max_local_video_tokens   = 98'304;
 };
 
 // Clamps the smart-resize pixel ceilings so one image, or one two-frame video group, never
@@ -112,6 +114,10 @@ struct ProcessedInput {
     std::vector<VisionItem> vision_items;
     // One immutable row-major [raw_patches, 1536] payload per Vision item.
     std::vector<std::shared_ptr<const qwen3_5::PreparedMediaPayload>> media_payloads;
+    // Slots are one-to-one with vision_items. Ordinary media has a null local-video slot; local
+    // video has a null eager payload and an immutable indexed source plan.
+    std::vector<std::shared_ptr<PreparedLocalVideoInput>> local_videos;
+    bool has_local_video = false;
     std::optional<RewriteCheckpointSpec> rewrite_checkpoint;
     std::vector<std::uint32_t> rewrite_execution_frontiers;
     std::vector<std::optional<std::uint32_t>> message_boundaries;

@@ -53,6 +53,7 @@ struct MediaData {
     std::string media_type;
     std::string source_name;
     ImageResizePolicy image_resize_policy = ImageResizePolicy::Downsize;
+    std::optional<OwnedLocalVideo> local_video;
 };
 
 struct ChatPart {
