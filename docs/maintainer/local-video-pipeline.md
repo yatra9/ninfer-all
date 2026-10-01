@@ -168,10 +168,16 @@ columns exactly. A shared live-memory regression holds one request's chunk while
 materializes the same chunk under a one-chunk capacity: the second waits, proceeds after release,
 and returns the account to zero rather than exceeding the configured capacity.
 
-On the RTX 3090 target, the same 256-token video was executed through overlay Vision once with a
-256-token envelope and once as four 64-token chunks. The greedy first token matched, its logprob
-differed by 0.07572, and 19 of the top 20 alternatives were shared. This is an end-to-end behavioral
-comparison, not a direct comparison of the Vision embedding tensors. A 1024x768, 256-frame input
-completed as 98,304 Vision tokens in seven chunks. A client disconnect during that workload
-cancelled the request and the next media request completed, demonstrating request cleanup and
-overlay restoration.
+On the RTX 3090 target, a real Qwen3.8-27B Vision tower encoded the same deterministic four-group
+patch payload once as a complete item and once as 1+2+1 temporal-group slices. The direct 81,920
+BF16-element embedding comparison measured overall cosine similarity 0.999871 and RMSE 0.012337;
+the worst individual token measured cosine 0.999868 and RMSE 0.0229542. The standalone regression
+requires both overall and per-token cosine to remain at least 0.999 and both RMSE values to remain at
+most 0.03. Exact BF16 equality is not expected because changing the patch batch shape changes CUDA
+GEMM selection and rounding through the Vision layers.
+
+The same 256-token video was also executed through overlay Vision once with a 256-token envelope
+and once as four 64-token chunks. The greedy first token matched, its logprob differed by 0.07572,
+and 19 of the top 20 alternatives were shared. A 1024x768, 256-frame input completed as 98,304
+Vision tokens in seven chunks. A client disconnect during that workload cancelled the request and
+the next media request completed, demonstrating request cleanup and overlay restoration.

@@ -127,8 +127,14 @@ ninfer_add_test(ninfer_qwen3_5_vision_workspace_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_vision_workspace.cpp"
   LIBRARIES ninfer_model_runtime ninfer_engine)
 
+ninfer_add_test(ninfer_qwen3_5_local_video_vision_real_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_local_video_vision_real.cpp"
+  STANDALONE
+  LIBRARIES ninfer_model_runtime ninfer_engine)
+
 set_tests_properties(
   ninfer_qwen3_5_vision_workspace_test
+  ninfer_qwen3_5_local_video_vision_real_test
   PROPERTIES SKIP_RETURN_CODE 77)
 
 # k=7 graph=1 optimized=1 batch=2 kv=int8 vision=0 state_slots=1. The argv fallbacks are k=15,
