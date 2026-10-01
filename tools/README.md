@@ -23,6 +23,7 @@ Python tools are independent of CMake; there is no `NINFER_BUILD_TOOLS` option.
 | Watch a resident server: dashboard, and restart on a wedge | [`monitor/`](monitor/README.md) |
 | Check long-context recall, cold prefill against a cached prefix | [`longctx_recall_probe.py`](longctx_recall_probe.py) |
 | Exercise a resident HTTP server | [`smoke/serve_contract.py`](smoke/serve_contract.py) |
+| Ask a resident server about a local video | [`Invoke-NInferVideo.ps1`](Invoke-NInferVideo.ps1) |
 | Exercise thinking preservation through a managed server | [`smoke/serve_thinking_preservation.py`](smoke/serve_thinking_preservation.py) |
 | Measure the physical HBM read/copy ceiling | [`hbm_bandwidth_probe.cu`](hbm_bandwidth_probe.cu); [build command](#standalone-hbm-probe) |
 
@@ -97,6 +98,19 @@ runner remains an external-only HTTP client; the separate controller owns Serve 
 artifacts. See [`tools/bench/ttft/README.md`](bench/ttft/README.md).
 
 ## Serving smoke
+
+For an interactive local-video check from PowerShell, start `ninfer-serve` with `--vision` and
+`--local-media-root /videos`, then pass the video's path inside that container root:
+
+```powershell
+./tools/Invoke-NInferVideo.ps1 `
+  -VideoPath /videos/sample.mp4 `
+  -Prompt 'Describe what happens in this video.' `
+  -StartFrame 120 -EndFrame 360 -SkipFrame 2
+```
+
+Use `Get-Help ./tools/Invoke-NInferVideo.ps1 -Detailed` for the API, crop, scale, deinterlace,
+sampling, request-display, and raw-response options.
 
 After starting `ninfer-serve` in another terminal:
 

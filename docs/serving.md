@@ -724,11 +724,40 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 OpenAI image and video sources may be HTTP(S) URLs or base64 data URLs.
 
+For server-local files, start Serve with `--local-media-root /videos` and mount the host video
+directory at that container path. A `ninfer-video` URL uses an absolute container path and may
+select and transform frames before Qwen preprocessing:
+
+```text
+ninfer-video:///videos/clip%20one.mp4?start_frame=120&end_frame=360&skip_frame=2&bbox=100,50,800,600&scale=0.75&deinterlace=auto
+```
+
+`start_frame` and inclusive `end_frame` select source-frame indices. `skip_frame=N` keeps one
+selected frame and skips the next N. `bbox=x,y,width,height` crops before `scale` is applied;
+`scale` must be positive. `deinterlace` accepts `auto`, `on`, or `off`. All fields are optional,
+duplicate or unknown query fields are rejected, and paths must be percent-encoded when they contain
+reserved URL characters.
+
+The repository includes a PowerShell client for manual tests. It builds the URL, sends a
+non-streaming Chat Completions request, and prints the answer, optional reasoning, finish reason,
+and token usage:
+
+```powershell
+./tools/Invoke-NInferVideo.ps1 `
+  -ApiBaseUrl http://127.0.0.1:8080/v1 `
+  -Model qwen3.8-27b `
+  -VideoPath '/videos/clip one.mp4' `
+  -Prompt 'What happens in these frames?' `
+  -StartFrame 120 -EndFrame 360 -SkipFrame 2
+```
+
 Text and media requests use one complete-prompt context contract. After chat-template rendering and
-media-token expansion, the result must fit Engine `--max-context`. The current Vision runtime also
-has a 32,768 merged-token envelope (131,072 raw patches); the effective Vision limit is therefore
-`min(--max-context, 32768)`. There is no fixed image/video item-count limit: item count is admitted
-through aggregate source-byte, decoded-pixel, raw-patch, Vision-token, and live-memory budgets.
+media-token expansion, the result must fit Engine `--max-context`. Ordinary byte-backed media also
+has a 32,768 merged-token aggregate envelope (131,072 raw patches). Indexed `ninfer-video` inputs
+instead use the separate `--local-video-max-tokens` aggregate, while every execution chunk is
+bounded by `--vision-max-merged`. There is no fixed image/video item-count limit: item count is
+admitted through aggregate source-byte, decoded-pixel, raw-patch, Vision-token, and live-memory
+budgets.
 
 Media cache misses run as independent decode → resize → BF16-pack tasks on a bounded host worker
 pool. Prepared payloads are keyed by SHA-256 of the acquired bytes plus modality, so repeated media
