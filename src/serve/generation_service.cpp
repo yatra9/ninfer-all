@@ -58,7 +58,7 @@ ApiError request_error_to_api_error(const ninfer::RequestError& exception) {
         error.code   = "thinking_budget_capacity_insufficient";
         break;
     case ninfer::RequestErrorKind::MediaBudgetExceeded:
-        error.status = 400;
+        error.status = 413;
         error.code   = "media_budget_exceeded";
         break;
     case ninfer::RequestErrorKind::InvalidMedia:
@@ -105,7 +105,7 @@ using Clock = std::chrono::steady_clock;
     error.message = exception.what();
     switch (exception.kind()) {
     case ninfer::product::media_acquire::ErrorKind::BudgetExceeded:
-        error.status = 400;
+        error.status = 413;
         error.code   = "media_budget_exceeded";
         break;
     case ninfer::product::media_acquire::ErrorKind::RemoteUnavailable:

@@ -26,8 +26,8 @@ int main() {
     const ninfer::serve::ApiError media_budget = ninfer::serve::request_error_to_api_error(
         ninfer::RequestError(ninfer::RequestErrorKind::MediaBudgetExceeded,
                              "vision tokens exceed processor budget"));
-    failures += check(media_budget.status == 400 && media_budget.code == "media_budget_exceeded",
-                      "media resource rejection did not map to HTTP 400");
+    failures += check(media_budget.status == 413 && media_budget.code == "media_budget_exceeded",
+                      "media resource rejection did not map to HTTP 413");
     const ninfer::serve::ApiError invalid_media = ninfer::serve::request_error_to_api_error(
         ninfer::RequestError(ninfer::RequestErrorKind::InvalidMedia, "failed to open media"));
     failures += check(invalid_media.status == 400 && invalid_media.code == "invalid_media" &&
