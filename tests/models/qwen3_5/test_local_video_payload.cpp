@@ -120,6 +120,29 @@ void run(const std::filesystem::path& path) {
     }
     expect(source_pixels_are_budget,
            "source pixel limit is reported as a typed resource limit before decoder setup");
+    lv::VideoSource reused_limits(path);
+    (void)reused_limits.plan({});
+    lv::Options reused_pixel_options;
+    reused_pixel_options.max_pixels = 1024;
+    reused_pixel_options.scale = 0.25;
+    bool reused_pixels_are_budget = false;
+    try {
+        (void)reused_limits.plan(reused_pixel_options);
+    } catch (const lv::Error& error) {
+        reused_pixels_are_budget = error.kind() == lv::ErrorKind::ResourceLimit;
+    }
+    expect(reused_pixels_are_budget,
+           "a reused index preserves the per-request source pixel limit");
+    lv::Options reused_scan_options;
+    reused_scan_options.max_scan_frames = 1;
+    bool reused_scan_is_budget = false;
+    try {
+        (void)reused_limits.plan(reused_scan_options);
+    } catch (const lv::Error& error) {
+        reused_scan_is_budget = error.kind() == lv::ErrorKind::ResourceLimit;
+    }
+    expect(reused_scan_is_budget,
+           "a reused index preserves the per-request scan-frame limit");
 
     auto cancelled_source_cache = std::make_shared<fi::LocalVideoSourceCache>(1);
     std::atomic<unsigned> planning_checkpoints{0};
@@ -204,6 +227,26 @@ void run(const std::filesystem::path& path) {
         prepared.prompt.chunks.front().temporal_count *
         static_cast<std::size_t>(prepared.prompt.grid_height) * prepared.prompt.grid_width *
         ninfer::models::qwen3_5::kPreparedVisionPatchFeatures * sizeof(std::uint16_t);
+    auto reserved_account = std::make_shared<fi::MediaPreprocessCache>(
+        0, one_chunk_bytes * 2, 1, one_chunk_bytes * 2);
+    auto reserved = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,
+                                                   reserved_account);
+    reserved.payload_reservation = reserved_account->reserve_payload(
+        one_chunk_bytes / sizeof(std::uint16_t), {});
+    auto later_image = reserved_account->allocate_payload(
+        one_chunk_bytes / sizeof(std::uint16_t), {});
+    fi::LocalVideoPayloadReader reserved_reader(reserved);
+    auto reserved_chunk = reserved_reader.read_chunk(0);
+    expect(reserved_chunk && reserved_account->stats().live_bytes == one_chunk_bytes * 2,
+           "reserved local chunk materializes while a later ordinary payload holds the remainder");
+    reserved_chunk.reset();
+    expect(reserved_account->stats().live_bytes == one_chunk_bytes * 2,
+           "releasing a chunk returns its storage to the retained video reservation");
+    reserved.payload_reservation.reset();
+    expect(reserved_account->stats().live_bytes == one_chunk_bytes,
+           "destroying the video reservation returns its capacity to the shared account");
+    later_image.reset();
+
     auto shared_account = std::make_shared<fi::MediaPreprocessCache>(0, one_chunk_bytes, 1,
                                                                      one_chunk_bytes);
     auto request_a = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,

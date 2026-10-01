@@ -407,6 +407,7 @@ struct VideoSource::Impl {
     std::condition_variable index_changed;
     bool index_building = false;
     std::shared_ptr<const std::vector<Timing>> index;
+    std::int64_t index_max_pixels = 0;
     Stats index_stats;
     SourceStats diagnostics;
 
@@ -427,7 +428,14 @@ struct VideoSource::Impl {
             require_unchanged();
             {
                 std::unique_lock lock(mutex);
-                if(index) { ++diagnostics.index_reuses; return; }
+                if(index) {
+                    require_resource(index->size() <= std::uint64_t(o.max_scan_frames),
+                                     "index exceeds max_scan_frames");
+                    require_resource(index_max_pixels <= o.max_pixels,
+                                     "source dimensions exceed max_pixels");
+                    ++diagnostics.index_reuses;
+                    return;
+                }
                 if(index_building) {
                     index_changed.wait_for(lock, std::chrono::milliseconds(10));
                     continue;
@@ -437,10 +445,13 @@ struct VideoSource::Impl {
             try {
                 auto started=Clock::now();
                 auto candidate=std::make_shared<std::vector<Timing>>();
+                std::int64_t candidate_max_pixels=0;
                 Input scan(path,&o); auto f=frame();
                 std::optional<std::int64_t> delta; bool variable=false;
                 while(scan.next(f.get())) {
                     geometry(f.get(),o);
+                    candidate_max_pixels=std::max(candidate_max_pixels,
+                                                  std::int64_t(f->width)*f->height);
                     require_resource(candidate->size()<std::uint64_t(o.max_scan_frames),"index exceeds max_scan_frames");
                     auto stamp=pts(f.get());
                     if(!candidate->empty()) {
@@ -460,6 +471,7 @@ struct VideoSource::Impl {
                 {
                     std::lock_guard lock(mutex);
                     index_stats=completed;
+                    index_max_pixels=candidate_max_pixels;
                     index=std::move(candidate); // Publish only a complete, unchanged index.
                     ++diagnostics.index_builds;
                     diagnostics.index_scanned_frames+=completed.indexed_frames;

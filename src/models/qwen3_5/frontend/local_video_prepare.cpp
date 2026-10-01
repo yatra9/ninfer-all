@@ -146,8 +146,11 @@ LocalVideoPayloadReader::read_chunk(std::size_t chunk_index) {
     if (!impl_->input->payload_account) {
         throw std::logic_error("local video payload has no live-memory account");
     }
-    auto payload = impl_->input->payload_account->allocate_payload(checked_elements(patches),
-                                                                   impl_->control);
+    auto payload = impl_->input->payload_reservation
+                       ? impl_->input->payload_reservation->allocate_payload(
+                             checked_elements(patches), impl_->control)
+                       : impl_->input->payload_account->allocate_payload(checked_elements(patches),
+                                                                          impl_->control);
     std::size_t cursor = 0;
     for (std::size_t temporal = 0; temporal < plan.temporal_count; ++temporal) {
         const std::size_t first_index = temporal * 2;

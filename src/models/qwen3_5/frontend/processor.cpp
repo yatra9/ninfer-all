@@ -998,22 +998,65 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
     ConcurrentMediaBudget request_budget(options_);
     std::exception_ptr preparation_error;
     const auto media_phase_started = Clock::now();
+    // Plan local videos first so one execution chunk can be reserved before ordinary media
+    // payloads are retained by this prompt. All local-video chunks execute serially and share it.
     for (std::size_t part_index = 0; part_index < parts.size(); ++part_index) {
+        ChatPart* part = parts[part_index];
+        if (!part->media.local_video) { continue; }
+        try {
+            check_preparation_control(control);
+#ifdef _WIN32
+            throw std::invalid_argument("local video is available only in the WSLC build");
+#else
+            planned_local_videos[part_index] = std::make_shared<PreparedLocalVideoInput>(
+                prepare_local_video_input(*part->media.local_video, worker_control,
+                                          options_.max_local_video_tokens,
+                                          options_.max_vision_execution_tokens,
+                                          local_video_cache_, media_cache_));
+#endif
+        } catch (...) {
+            preparation_error = std::current_exception();
+            stop_preparation.store(true, std::memory_order_relaxed);
+            break;
+        }
+    }
+    if (!preparation_error) {
+        std::uint64_t maximum_chunk_elements = 0;
+        for (const auto& local : planned_local_videos) {
+            if (!local) { continue; }
+            for (const LocalVideoChunkPlan& chunk : local->prompt.chunks) {
+                maximum_chunk_elements =
+                    std::max(maximum_chunk_elements,
+                             checked_mul(checked_mul(chunk.token_count,
+                                                     kRawPatchesPerVisionToken,
+                                                     "local video chunk patches"),
+                                         kPreparedVisionPatchFeatures,
+                                         "local video chunk payload"));
+            }
+        }
+        if (maximum_chunk_elements > std::numeric_limits<std::size_t>::max()) {
+            preparation_error = std::make_exception_ptr(
+                std::overflow_error("local video chunk payload exceeds size_t"));
+        } else if (maximum_chunk_elements != 0) {
+            try {
+                auto reservation = media_cache_->reserve_payload(
+                    static_cast<std::size_t>(maximum_chunk_elements), control);
+                for (auto& local : planned_local_videos) {
+                    if (local) { local->payload_reservation = reservation; }
+                }
+            } catch (...) {
+                preparation_error = std::current_exception();
+                stop_preparation.store(true, std::memory_order_relaxed);
+            }
+        }
+    }
+    for (std::size_t part_index = 0; !preparation_error && part_index < parts.size(); ++part_index) {
         ChatPart* part = parts[part_index];
         try {
             check_preparation_control(control);
-            if (part->media.local_video) {
-#ifdef _WIN32
-                throw std::invalid_argument("local video is available only in the WSLC build");
-#else
-                planned_local_videos[part_index] = std::make_shared<PreparedLocalVideoInput>(
-                    prepare_local_video_input(*part->media.local_video, worker_control,
-                                              options_.max_local_video_tokens,
-                                              options_.max_vision_execution_tokens,
-                                              local_video_cache_, media_cache_));
+            if (planned_local_videos[part_index]) {
                 pending_items.emplace_back();
                 continue;
-#endif
             }
             const auto digest =
                 sha256(part->media.bytes, [&control] { check_preparation_control(control); });

@@ -16,6 +16,7 @@ struct PreparedMediaPayload;
 
 namespace ninfer::models::qwen3_5::frontend {
 class MediaPreprocessCache;
+class MediaPayloadReservation;
 
 // Process-wide frontend cache for immutable local-video sources. Entries are fingerprinted by
 // size and modification time; replacing a file publishes a new source while active requests keep
@@ -38,6 +39,7 @@ private:
 struct PreparedLocalVideoInput {
     std::shared_ptr<media::local_video::VideoSource> source;
     std::shared_ptr<MediaPreprocessCache> payload_account;
+    std::shared_ptr<MediaPayloadReservation> payload_reservation;
     media::local_video::Options reader_options;
     media::local_video::Stats index_stats;
     media::local_video::SourceStats source_stats;

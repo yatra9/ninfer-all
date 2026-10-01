@@ -114,10 +114,13 @@ public:
 item has a null local-video slot, while a local video has a typed plan and a null eager payload.
 Request planning validates total item metadata and each chunk extent. `VisionPrefillSession`
 creates one request-owned reader, obtains each payload in plan order, encodes it, and releases it
-with the existing request cleanup and exception guarantees. Each payload reserves bytes from the
-shared media live-memory account until its final reference is released. Cancellation and the
-request deadline are checked during indexing, decode, live-memory waits, and patchification row
-boundaries. Source identity is checked before and after every chunk returned to execution.
+with the existing request cleanup and exception guarantees. Before ordinary media payloads are
+retained, prompt preparation reserves enough of the shared media live-memory account for the
+largest local-video chunk. Every local video in that prompt reuses the reservation serially. This
+prevents later ordinary image/video payloads from consuming the chunk capacity and blocking the
+currently executing local video. Cancellation and the request deadline are checked during
+indexing, decode, reservation waits, and patchification row boundaries. Source identity is checked
+before and after every chunk returned to execution.
 
 The current `VisionItemControl` is item-wide. Chunk execution needs a control view containing the
 chunk's group count, patch range, position arrays, merged count, and the original global scatter
@@ -142,6 +145,8 @@ file size, and modification time. An unchanged path reuses its completed frame i
 requests. A changed file publishes a new source; active requests retain the old source and its
 unchanged checks reject mutation safely. Eviction drops only the cache reference, so it cannot
 invalidate an active reader. A failed or cancelled scan is not published by `VideoSource`.
+Per-request scan-frame and decoded-pixel limits are checked against a completed index on every
+reuse, so cache state cannot change whether a request is admitted.
 This cache is independent of prompt prefix reuse. The first implementation marks local-video
 prompt identity non-reusable, because path and modification metadata are not a content digest and
 pixels are materialized after prompt preparation. A later strong content identity requires a
@@ -166,15 +171,18 @@ all BF16 patch elements exactly with an independently decoded full payload. Runt
 compare prompt token IDs, token types, positions, timestamps, patch ranges, and global scatter
 columns exactly. A shared live-memory regression holds one request's chunk while a second request
 materializes the same chunk under a one-chunk capacity: the second waits, proceeds after release,
-and returns the account to zero rather than exceeding the configured capacity.
+and returns the account to zero rather than exceeding the configured capacity. A mixed-media
+regression also retains an ordinary payload after reserving a local chunk and verifies that the
+chunk materializes without waiting for that later payload to be released.
 
 On the RTX 3090 target, a real Qwen3.8-27B Vision tower encoded the same deterministic four-group
 patch payload once as a complete item and once as 1+2+1 temporal-group slices. The direct 81,920
 BF16-element embedding comparison measured overall cosine similarity 0.999908 and RMSE 0.0133091;
 the worst individual token measured cosine 0.999886 and normalized RMSE 0.028944. The standalone
 regression requires both overall and per-token cosine to remain at least 0.999, overall absolute
-RMSE at most 0.03, and per-token RMSE normalized by the reference token RMS at most 0.05. It rejects non-finite
-outputs or metrics. Its temporal groups use distinct hashed inputs with the same `[-2,2]`
+RMSE at most 0.03, and per-token RMSE normalized by the reference token RMS at most 0.05. It checks
+every full and chunked BF16 output for finite values before equality or tolerance comparison, then
+rejects non-finite metrics. Its temporal groups use distinct hashed inputs with the same `[-2,2]`
 distribution, so repeated or reordered groups cannot pass through periodic input. Exact BF16
 equality is not required; the measured difference is retained as empirical qualification rather
 than attributed to a particular CUDA route without route-level evidence.

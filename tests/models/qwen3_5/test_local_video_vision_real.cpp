@@ -120,6 +120,19 @@ int run() {
                                                               slice.patch_count * patch_width));
         chunked.insert(chunked.end(), output.begin(), output.end());
     }
+    if (whole.size() != chunked.size()) {
+        std::cerr << "full and chunked Vision output sizes differ: " << whole.size() << " vs "
+                  << chunked.size() << '\n';
+        return 1;
+    }
+    for (std::size_t index = 0; index < whole.size(); ++index) {
+        if (!std::isfinite(bf16_to_float(whole[index])) ||
+            !std::isfinite(bf16_to_float(chunked[index]))) {
+            std::cerr << "full or chunked Vision output is non-finite at BF16 element " << index
+                      << '\n';
+            return 1;
+        }
+    }
     if (whole != chunked) {
         const auto mismatch = std::mismatch(whole.begin(), whole.end(), chunked.begin());
         float maximum_absolute = 0.0F;
