@@ -7,12 +7,37 @@
 #include <cstdint>
 #include <memory>
 
+namespace ninfer::models::qwen3_5 {
+struct PreparedMediaPayload;
+}
+
 namespace ninfer::models::qwen3_5::frontend {
 
 struct PreparedLocalVideoInput {
     std::shared_ptr<media::local_video::VideoSource> source;
     media::local_video::Options reader_options;
     LocalVideoPromptPlan prompt;
+};
+
+class LocalVideoPayloadReader {
+public:
+    explicit LocalVideoPayloadReader(const PreparedLocalVideoInput& input,
+                                     PreparationControl control = {});
+    ~LocalVideoPayloadReader();
+    LocalVideoPayloadReader(LocalVideoPayloadReader&&) noexcept;
+    LocalVideoPayloadReader& operator=(LocalVideoPayloadReader&&) noexcept;
+
+    LocalVideoPayloadReader(const LocalVideoPayloadReader&) = delete;
+    LocalVideoPayloadReader& operator=(const LocalVideoPayloadReader&) = delete;
+
+    // Chunks must be requested once in plan order. The returned payload contains patch rows only
+    // for that temporal range and can be released as soon as its Vision output is encoded.
+    [[nodiscard]] std::shared_ptr<qwen3_5::PreparedMediaPayload>
+    read_chunk(std::size_t chunk_index);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 // Performs the one metadata/index pass shared by token counting and execution. It does not decode
