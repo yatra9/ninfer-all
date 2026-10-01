@@ -1,0 +1,144 @@
+#include "models/qwen3_5/frontend/local_video_prepare.h"
+#include "models/qwen3_5/frontend/prepared_prompt.h"
+#include "models/qwen3_5/frontend/vision_patchify.h"
+
+#include <ninfer/types.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <iostream>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+namespace fi = ninfer::models::qwen3_5::frontend;
+namespace lv = ninfer::media::local_video;
+
+int failures = 0;
+
+void expect(bool condition, std::string_view message) {
+    if (condition) { return; }
+    ++failures;
+    std::cerr << "FAIL: " << message << '\n';
+}
+
+std::vector<std::uint16_t> expected_payload(const fi::PreparedLocalVideoInput& prepared,
+                                            const std::vector<lv::Frame>& frames) {
+    const std::size_t groups = (frames.size() + 1) / 2;
+    const std::size_t patches = groups * static_cast<std::size_t>(prepared.prompt.grid_height) *
+                                prepared.prompt.grid_width;
+    std::vector<std::uint16_t> output(patches * ninfer::models::qwen3_5::kPreparedVisionPatchFeatures);
+    std::size_t cursor = 0;
+    for (std::size_t temporal = 0; temporal < groups; ++temporal) {
+        const auto& first = frames[temporal * 2];
+        const auto& second = frames[std::min(temporal * 2 + 1, frames.size() - 1)];
+        for (int block_y = 0; block_y < prepared.prompt.grid_height / 2; ++block_y) {
+            for (int block_x = 0; block_x < prepared.prompt.grid_width / 2; ++block_x) {
+                for (int merge_y = 0; merge_y < 2; ++merge_y) {
+                    for (int merge_x = 0; merge_x < 2; ++merge_x) {
+                        fi::append_vision_patch_pair(
+                            {first.width, first.height, first.rgb},
+                            {second.width, second.height, second.rgb}, block_y * 2 + merge_y,
+                            block_x * 2 + merge_x, output, cursor);
+                    }
+                }
+            }
+        }
+    }
+    expect(cursor == output.size(), "reference payload fills its allocation");
+    return output;
+}
+
+std::vector<lv::Frame> decode_reference(fi::PreparedLocalVideoInput& prepared) {
+    auto reader = prepared.source->create_reader(prepared.reader_options);
+    std::vector<lv::Frame> frames;
+    while (true) {
+        auto chunk = reader.read_chunk(2);
+        for (auto& frame : chunk.frames) { frames.push_back(std::move(frame)); }
+        if (chunk.eof) { break; }
+    }
+    return frames;
+}
+
+void run(const std::filesystem::path& path) {
+    ninfer::OwnedLocalVideo input;
+    input.path = path;
+    input.deinterlace = ninfer::LocalVideoDeinterlace::Off;
+    auto prepared = fi::prepare_local_video_input(input, {}, 24, 12);
+
+    expect(prepared.prompt.width == 96 && prepared.prompt.height == 64,
+           "prepared dimensions follow the fixture rather than a fixed resolution");
+    expect(prepared.prompt.selected_frames.size() == 7, "all seven fixture frames are selected");
+    expect(prepared.prompt.tokens_per_temporal_group == 6 && prepared.prompt.total_tokens == 24,
+           "96x64 geometry produces six tokens per temporal group");
+    expect(prepared.prompt.chunks.size() == 2, "four temporal groups are split into two chunks");
+    expect(prepared.prompt.chunks[0].frame_count == 4 &&
+               prepared.prompt.chunks[1].frame_begin == 4 &&
+               prepared.prompt.chunks[1].frame_count == 3,
+           "chunk boundaries retain the odd final source frame");
+
+    auto frames = decode_reference(prepared);
+    expect(frames.size() == 7, "reference reader decodes all selected frames");
+    auto expected = expected_payload(prepared, frames);
+
+    fi::LocalVideoPayloadReader reader(prepared);
+    bool rejected_out_of_order = false;
+    try {
+        (void)reader.read_chunk(1);
+    } catch (const std::invalid_argument&) {
+        rejected_out_of_order = true;
+    }
+    expect(rejected_out_of_order, "payload reader rejects an out-of-order first chunk");
+
+    std::vector<std::uint16_t> actual;
+    for (std::size_t index = 0; index < prepared.prompt.chunks.size(); ++index) {
+        auto payload = reader.read_chunk(index);
+        actual.insert(actual.end(), payload->span().begin(), payload->span().end());
+    }
+    expect(actual == expected,
+           "sequential chunk payloads exactly equal the independently decoded full payload");
+
+    bool rejected_repeat = false;
+    try {
+        (void)reader.read_chunk(1);
+    } catch (const std::invalid_argument&) {
+        rejected_repeat = true;
+    }
+    expect(rejected_repeat, "payload reader rejects a repeated chunk");
+
+    const auto stats = prepared.source->source_stats();
+    expect(stats.index_builds == 1, "planning builds the source index once");
+    expect(stats.index_reuses >= 2, "reference and payload readers reuse the prepared index");
+}
+
+} // namespace
+
+// The product test links the real preparation-control implementation from ninfer_model_runtime.
+// This definition is enabled only by the standalone WSLC source-level validation command.
+#ifdef NINFER_LOCAL_VIDEO_PAYLOAD_STANDALONE
+namespace ninfer::models::qwen3_5::frontend {
+void check_preparation_control(const PreparationControl&, std::string_view) {}
+} // namespace ninfer::models::qwen3_5::frontend
+#endif
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "usage: test_local_video_payload VIDEO\n";
+        return 2;
+    }
+    try {
+        run(argv[1]);
+    } catch (const std::exception& error) {
+        std::cerr << "unexpected failure: " << error.what() << '\n';
+        return 1;
+    }
+    if (failures != 0) {
+        std::cerr << failures << " local video payload checks failed\n";
+        return 1;
+    }
+    std::cout << "local video payload checks passed\n";
+    return 0;
+}

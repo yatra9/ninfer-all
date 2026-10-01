@@ -44,6 +44,18 @@ ninfer_add_test(ninfer_qwen3_5_vision_patchify_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_vision_patchify.cpp"
   LIBRARIES ninfer_engine ninfer_core)
 
+if(NOT WIN32)
+  add_executable(ninfer_qwen3_5_local_video_payload_test
+    "${CMAKE_CURRENT_LIST_DIR}/test_local_video_payload.cpp")
+  target_link_libraries(ninfer_qwen3_5_local_video_payload_test PRIVATE ninfer_model_runtime)
+  ninfer_test_includes(ninfer_qwen3_5_local_video_payload_test)
+  add_test(NAME ninfer_qwen3_5_local_video_payload_test
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/run_local_video_payload_test.py"
+            "$<TARGET_FILE:ninfer_qwen3_5_local_video_payload_test>")
+  set_tests_properties(ninfer_qwen3_5_local_video_payload_test PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 ninfer_add_test(ninfer_qwen3_5_chat_template_prefix_stability_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_chat_template_prefix_stability.cpp"
   NEEDS_SOURCE_DIR
