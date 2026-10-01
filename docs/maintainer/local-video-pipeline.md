@@ -3,7 +3,7 @@
 This reference owns the design boundary for the `ninfer-video://` serving extension. The feature
 accepts a server-local video selected by an explicit root policy, preserves source-frame timing,
 and supplies Qwen Vision in bounded temporal chunks. The external behavior and parameter contract
-are specified in the workspace `../SPEC.md`; this file records how that contract fits NInfer's
+are specified in [`SPEC_VIDEO.md`](../../SPEC_VIDEO.md); this file records how that contract fits NInfer's
 current frontend, Program, and Vision execution ownership.
 
 The canonical CPU decoder/filter implementation is `src/media/local_video/video_pipeline.*` and
