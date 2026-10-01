@@ -304,6 +304,9 @@ std::string serve_usage_text(const char* argv0) {
            "                                most 16)\n"
            "  --local-media-root PATH       enable ninfer-video for absolute files beneath this\n"
            "                                container path (disabled by default)\n"
+           "  --local-video-max-tokens N    aggregate local-video Vision tokens, 1..98304\n"
+           "                                (default 98304; execution chunks use\n"
+           "                                --vision-max-merged)\n"
            "\n"
            "SAMPLING & THINKING\n"
            "  --temperature F               0..2\n"
@@ -603,6 +606,13 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             if (options.local_media_root.empty() || !options.local_media_root.is_absolute()) {
                 throw std::invalid_argument("--local-media-root must be an absolute path");
             }
+        } else if (arg == "--local-video-max-tokens") {
+            const std::uint64_t tokens =
+                parse_u64(require_value("--local-video-max-tokens"), "local-video-max-tokens");
+            if (tokens == 0 || tokens > 98'304) {
+                throw std::invalid_argument("--local-video-max-tokens must be in [1, 98304]");
+            }
+            options.local_video_max_tokens = static_cast<std::uint32_t>(tokens);
         } else if (arg == "--use-alt-prefix-caching") {
             options.context_cache.mode = ContextCacheMode::Hybrid;
         } else if (arg == "--use-original-prefix-caching") {

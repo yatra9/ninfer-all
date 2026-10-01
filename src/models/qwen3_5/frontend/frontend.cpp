@@ -694,6 +694,10 @@ public:
           automatic_long_anchors(options.automatic_long_anchors),
           long_anchor_min_spacing_tokens(options.long_anchor_min_spacing_tokens) {
         fi::bound_merged_tokens(processor, options.vision_max_merged_tokens);
+        processor.max_local_video_tokens = options.local_video_max_tokens;
+        processor.max_vision_execution_tokens =
+            options.vision_max_merged_tokens == 0 ? kMaximumVisionItemTokens
+                                                  : options.vision_max_merged_tokens;
         if (options.max_context == 0) {
             throw std::invalid_argument("frontend max_context must be nonzero");
         }

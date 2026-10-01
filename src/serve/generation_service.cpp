@@ -303,6 +303,7 @@ ninfer::EngineOptions make_engine_options(const ServeOptions& options) {
     engine_options.enable_vision            = options.enable_vision;
     engine_options.vision_residency         = options.vision_residency;
     engine_options.vision_max_merged_tokens = options.vision_max_merged_tokens;
+    engine_options.local_video_max_tokens   = options.local_video_max_tokens;
     engine_options.use_cuda_graph           = options.use_cuda_graph;
     engine_options.lm_head_q4               = options.lm_head_q4;
     engine_options.lm_head_q6               = options.lm_head_q6;

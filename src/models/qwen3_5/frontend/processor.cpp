@@ -877,7 +877,9 @@ Processor::Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& cha
         options_.video_max_pixels < options_.video_min_pixels || !(options_.video_fps > 0.0) ||
         options_.video_min_frames <= 0 || options_.video_max_frames < options_.video_min_frames ||
         options_.max_video_source_frames < options_.video_max_frames ||
-        !(options_.max_video_duration_seconds > 0.0) || options_.max_local_video_tokens == 0) {
+        !(options_.max_video_duration_seconds > 0.0) || options_.max_local_video_tokens == 0 ||
+        options_.max_vision_execution_tokens == 0 ||
+        options_.max_vision_execution_tokens > kMaximumVisionItemTokens) {
         throw std::invalid_argument("processor budgets must be positive");
     }
     if (!media_cache_) { throw std::invalid_argument("processor media cache must not be null"); }
@@ -915,7 +917,7 @@ std::size_t Processor::count_tokens(std::vector<ChatMessage> messages,
 #else
                 PreparedLocalVideoInput local = prepare_local_video_input(
                     *part->media.local_video, control, options_.max_local_video_tokens,
-                    kMaximumVisionItemTokens);
+                    options_.max_vision_execution_tokens);
                 VisionItem item = local_video_item(local.prompt);
                 if (local.prompt.total_tokens >
                     options_.max_local_video_tokens - local_video_tokens) {
@@ -1035,7 +1037,7 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
                 planned_local_videos[part_index] = std::make_shared<PreparedLocalVideoInput>(
                     prepare_local_video_input(*part->media.local_video, worker_control,
                                               options_.max_local_video_tokens,
-                                              kMaximumVisionItemTokens));
+                                              options_.max_vision_execution_tokens));
                 pending_items.emplace_back();
                 continue;
 #endif

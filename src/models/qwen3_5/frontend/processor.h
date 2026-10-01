@@ -98,6 +98,7 @@ struct ProcessorOptions {
     int video_min_frames                   = 4;
     int video_max_frames                   = 768;
     std::uint64_t max_local_video_tokens   = 98'304;
+    std::uint64_t max_vision_execution_tokens = kMaximumVisionItemTokens;
 };
 
 // Clamps the smart-resize pixel ceilings so one image, or one two-frame video group, never

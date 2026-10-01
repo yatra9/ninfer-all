@@ -1236,6 +1236,8 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--vision-residency resident\|overlay\|cpu` | `overlay` keeps the Vision tower in pinned host memory and encodes each image inside a window borrowed from the evict-ranked text weight tail, so `--vision` no longer reserves device memory and `--kv-capacity auto` resolves the no-vision capacity; requires `--vision` and CUDA virtual memory management. `--vision-offload on\|off` is accepted as an alias for `overlay\|resident`. `cpu` decodes the tower to host FP32 and encodes on CPU threads with no device Vision memory (see [Vision residency](#vision-residency)); it caps `--vision-max-merged` at 256 unless given | `resident` |
 | `--vision-cpu` | `--vision` with `--vision-residency cpu` | off |
 | `--vision-max-merged N` | merged-token budget of one media item, `[64, 16384]`; larger images and video frame pairs are downscaled at preprocessing instead of being rejected, and the overlay window is sized for it | 16384 |
+| `--local-media-root PATH` | enable `ninfer-video` URLs for canonical regular files beneath this absolute container path | disabled |
+| `--local-video-max-tokens N` | aggregate merged-token budget for one request's indexed local videos, `[1, 98304]`; each execution chunk remains bounded by `--vision-max-merged` | 98304 |
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
 | `--cuda-graph-allowance-mib N` | total CUDA Graph driver-state allowance in MiB, subtracted from the KV sizing budget | computed |
 | `--no-prefix-reuse` | disable compatible-prefix caching | prefix reuse on |

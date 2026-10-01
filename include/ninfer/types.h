@@ -451,6 +451,9 @@ struct EngineOptions {
     // Largest merged-token count one media item may occupy; larger media is downscaled at
     // preprocessing. Also bounds the overlay window.
     std::uint32_t vision_max_merged_tokens = 16384;
+    // Aggregate merged-token budget for indexed local video. Execution remains bounded by
+    // vision_max_merged_tokens and materializes one chunk at a time.
+    std::uint32_t local_video_max_tokens   = 98'304;
     bool use_cuda_graph                    = true;
     // Explicit total CUDA Graph driver-state allowance in bytes; zero keeps the
     // computed per-profile allowance.
