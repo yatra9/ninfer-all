@@ -170,6 +170,11 @@ Errors from indexing, decode, filtering, materialization, Vision encode, deadlin
 file mutation poison the request. No partial prompt is published as success. Reader and provider
 destruction stops background work before releasing request-owned state. Overlay restoration and
 the existing Program transaction cleanup remain authoritative for GPU failure recovery.
+The initial full index rejects a midstream decoded geometry or pixel-format change before the
+prepared prompt is admitted. Failures that can only be observed by the lazy reader are translated
+to a typed request error. The Program clears the failed prefill lane, and the Engine reconciles its
+logical resource ownership without a second abort. Later requests continue on the same resident
+model.
 
 ## Qualification evidence
 

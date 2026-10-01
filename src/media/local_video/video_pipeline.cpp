@@ -446,10 +446,20 @@ struct VideoSource::Impl {
                 auto started=Clock::now();
                 auto candidate=std::make_shared<std::vector<Timing>>();
                 std::int64_t candidate_max_pixels=0;
+                int candidate_width=0,candidate_height=0,candidate_format=-1;
                 Input scan(path,&o); auto f=frame();
                 std::optional<std::int64_t> delta; bool variable=false;
                 while(scan.next(f.get())) {
                     geometry(f.get(),o);
+                    if(candidate_width==0) {
+                        candidate_width=f->width;
+                        candidate_height=f->height;
+                        candidate_format=f->format;
+                    } else {
+                        require(f->width==candidate_width && f->height==candidate_height &&
+                                    f->format==candidate_format,
+                                "midstream geometry/pixel-format change is unsupported");
+                    }
                     candidate_max_pixels=std::max(candidate_max_pixels,
                                                   std::int64_t(f->width)*f->height);
                     require_resource(candidate->size()<std::uint64_t(o.max_scan_frames),"index exceeds max_scan_frames");

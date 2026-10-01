@@ -53,6 +53,7 @@ public:
     using SequenceHandle     = typename ModelContract::SequenceHandle;
     using CaptureOffer       = typename ModelContract::CaptureOffer;
     using PendingBatch       = typename ModelContract::PendingBatch;
+    using PrefillProgress    = typename ModelContract::PrefillProgress;
     using PreparedPrompt     = typename ModelContract::PreparedPrompt;
     using NgramArchive       = typename ModelContract::NgramArchive;
     using OutputSession      = typename ModelContract::OutputSession;
@@ -1306,7 +1307,8 @@ private:
         } catch (...) {
             rollback_generated();
             if (!instance_.program->has_context_transaction()) {
-                resources_.release_failed_commit(std::span<const LaneId>(lanes.data(), row_count));
+                resources_.release_after_program_failure(
+                    std::span<const LaneId>(lanes.data(), row_count));
             }
             throw;
         }
@@ -1543,15 +1545,30 @@ private:
             throw std::logic_error("prefill request has no sequence handle");
         }
         setup.finish();
-        ProgramCallScope program_call(*this);
-        auto progress =
-            instance_.program->advance_prefill(*request->sequence, &program_call.failed_timing());
-        program_call.finish(progress.timing);
-        resolve_prefill_progress(request, std::move(progress), cancelled_at_unit_start);
+        std::optional<PrefillProgress> progress;
+        try {
+            ProgramCallScope program_call(*this);
+            progress.emplace(instance_.program->advance_prefill(
+                *request->sequence, &program_call.failed_timing()));
+            program_call.finish(progress->timing);
+        } catch (const RequestError&) {
+            // Media pixels can be decoded lazily during prefill. A corrupt or changed source,
+            // cancellation, or deadline is a failure of this request; the Program has already
+            // synchronized and cleared the failed execution lane before propagating the error.
+            const std::exception_ptr error = std::current_exception();
+            const LaneId failed_lane = *request->lane;
+            resources_.release_after_program_failure(
+                std::span<const LaneId>(&failed_lane, 1));
+            remove_completed_slot(lane);
+            publish_runtime_stats();
+            complete_error(request, error);
+            return;
+        }
+        resolve_prefill_progress(request, std::move(*progress), cancelled_at_unit_start);
         // A completed prefill already re-arms admission (owner cleared above). Re-arm again when
         // the request keeps prefilling: each prefill boundary is an admission point, so a waiting
         // request can be admitted to a free lane while another request is still prefilling.
-        if (!progress.complete && request->is_prefilling()) { request_admission_check(); }
+        if (!progress->complete && request->is_prefilling()) { request_admission_check(); }
         publish_runtime_stats();
     }
 

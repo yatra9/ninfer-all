@@ -29,6 +29,13 @@ std::size_t checked_elements(std::size_t patches) {
     return patches * kPreparedVisionPatchFeatures;
 }
 
+[[noreturn]] void throw_video_error(const media::local_video::Error& error) {
+    throw RequestError(error.kind() == media::local_video::ErrorKind::ResourceLimit
+                           ? RequestErrorKind::MediaBudgetExceeded
+                           : RequestErrorKind::InvalidMedia,
+                       error.what());
+}
+
 } // namespace
 
 struct LocalVideoSourceCache::Entry {
@@ -99,8 +106,17 @@ struct LocalVideoPayloadReader::Impl {
 };
 
 LocalVideoPayloadReader::LocalVideoPayloadReader(const PreparedLocalVideoInput& input,
-                                                 PreparationControl control)
-    : impl_(std::make_unique<Impl>(input, std::move(control))) {}
+                                                 PreparationControl control) {
+    try {
+        impl_ = std::make_unique<Impl>(input, std::move(control));
+    } catch (const media::local_video::Error& error) {
+        throw_video_error(error);
+    } catch (const RequestError&) {
+        throw;
+    } catch (const std::runtime_error& error) {
+        throw RequestError(RequestErrorKind::InvalidMedia, error.what());
+    }
+}
 
 LocalVideoPayloadReader::~LocalVideoPayloadReader() = default;
 LocalVideoPayloadReader::LocalVideoPayloadReader(LocalVideoPayloadReader&&) noexcept = default;
@@ -119,13 +135,18 @@ LocalVideoPayloadReader::read_chunk(std::size_t chunk_index) {
     try {
         decoded = impl_->reader.read_chunk(plan.frame_count);
     } catch (const media::local_video::Error& error) {
-        throw RequestError(error.kind() == media::local_video::ErrorKind::ResourceLimit
-                               ? RequestErrorKind::MediaBudgetExceeded
-                               : RequestErrorKind::InvalidMedia,
-                           error.what());
+        throw_video_error(error);
+    } catch (const RequestError&) {
+        throw;
+    } catch (const std::runtime_error& error) {
+        // Decode/filter failures are discovered lazily because local-video pixels are intentionally
+        // not materialized during prompt preparation. They are invalid request media, rather than
+        // an Engine invariant failure.
+        throw RequestError(RequestErrorKind::InvalidMedia, error.what());
     }
     if (decoded.frames.size() != plan.frame_count) {
-        throw std::runtime_error("local video ended before its prepared chunk boundary");
+        throw RequestError(RequestErrorKind::InvalidMedia,
+                           "local video ended before its prepared chunk boundary");
     }
     const std::size_t global_begin = plan.frame_begin;
     for (std::size_t index = 0; index < decoded.frames.size(); ++index) {
@@ -136,7 +157,8 @@ LocalVideoPayloadReader::read_chunk(std::size_t chunk_index) {
             actual.width != impl_->input->prompt.width ||
             actual.height != impl_->input->prompt.height ||
             actual.rgb.size() != static_cast<std::size_t>(actual.width) * actual.height * 3) {
-            throw std::runtime_error("local video decode no longer matches its prepared plan");
+            throw RequestError(RequestErrorKind::InvalidMedia,
+                               "local video decode no longer matches its prepared plan");
         }
     }
 
