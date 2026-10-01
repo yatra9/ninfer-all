@@ -25,6 +25,9 @@ Tests are grouped by observable risk, not by mirroring every source file or clas
 physical backing at the same three reserved addresses 1000 times, replays one captured
 GraphExec, checks the complete persistent snapshot and its internal pointers, and poisons
 fresh workspace before each replay. It returns CTest skip code 77 without usable CUDA/VMM.
+`ninfer_suspend_backing_test` qualifies the opt-in arena and both overlay pools across
+detach/new-backing attach, arena moves and detached destruction, create/map/access fault
+cleanup, busy rejection, and subsequent overlay loans using the new handles.
 `CMakeLists.txt` includes explicit registrations from `cmake/`, `artifact/`, `models/qwen3_5/`
 and `ops/`. Registration helpers live in `cmake/NinferTests.cmake`; included manifests keep
 executables and CTest working directories under `build/tests/`.

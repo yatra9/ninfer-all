@@ -80,6 +80,10 @@ public:
     [[nodiscard]] bool mirror_captured() const noexcept;
     [[nodiscard]] bool transaction_open() const noexcept;
     [[nodiscard]] bool poisoned() const noexcept;
+    // Exclusive, idle-only operations; callers drain every stream before detach.
+    [[nodiscard]] std::size_t physical_bytes() const noexcept;
+    void detach_backing();
+    void attach_backing();
 
     // Fixes the largest extent one transaction may borrow (rounded up to whole chunks), reserves
     // its overlay range and pins a copy of every tail byte such a window can dirty. Call exactly

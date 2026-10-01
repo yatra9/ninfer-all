@@ -89,6 +89,10 @@ public:
     [[nodiscard]] std::size_t window_capacity_bytes() const noexcept;
     [[nodiscard]] bool lease_open() const noexcept;
     [[nodiscard]] bool poisoned() const noexcept;
+    // Exclusive, idle-only operations; callers drain every stream before detach.
+    [[nodiscard]] std::size_t physical_bytes() const noexcept;
+    void detach_backing();
+    void attach_backing();
 
     // Granule containing an arena offset, and the arena range one granule covers.
     [[nodiscard]] std::size_t granule_of(std::size_t offset) const;

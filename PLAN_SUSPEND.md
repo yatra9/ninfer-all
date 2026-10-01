@@ -9,11 +9,22 @@
   `ninfer-syntax:dev`、CUDA 13.1.115、RTX 3090でcompile/run成功。1000回のphysical backing
   解放・新規create・same-VA mapを、単一capture/instantiateのGraphExecで検証した。
   persistent capacity全bytesの復元一致、内部pointer、継続round counter、毎回異なる値で汚した
-  fresh workspaceからの正しい出力も確認済み。製品コード変更はまだ行っていない。
+  fresh workspaceからの正しい出力も確認済み。
+- P1 Core実装完了: `RemappableDeviceAllocation` と通常DeviceArenaのopt-in fixed-VA経路、
+  weight/KV poolのidle detach/attach、logical capacityとphysical bytesの分離を実装。
+  VA・offset・mirror・貸出metadataは維持し、再attachは新規handleを利用する。
+  各pieceのhome/overlay mappingと有効handleを追跡し、constructor/partial attach失敗と
+  detached状態のdestructorで二重releaseを避ける。別CUDA contextでの操作を拒否する。
+- P1検証: WSLC、CUDA 13.1.115、GCC 13、RTX 3090で `test_suspend_backing`、既存arena、
+  weight pool、KV poolをcompile/runして成功。新規backingの両pool20回反復、arenaのmove/assignment、
+  detached破棄、create/map/access失敗注入、復帰後overlay貸出とweight mirror復元を確認した。
+  Python入り既存 `ninfer-vision-audit` image（Python 3.12.3）で正式CTest configure成功。
+  Pythonテストは実行していない。Windows nativeでのbuild/runは未検証。
 - 合意済み: suspendはidle時のみ。既存のVision overlayも対応対象とし、対応を別機能として切り離さない。
 - 合意済み（2026-10-02）: 実機検証はWSLC上のLinuxを優先する。P0 PoCと実モデル受入はこの環境から進める。
-- 次の作業: P0の所有権・workspace監査を完了し、各arenaの正確な容量・physical量を計測してP1へ進む。
-  既存受入モデルを `ninfer-suspend-budget` コンテナ、host port 18082で一時起動して計測中。
+- 次の作業: P2 materializerの既存destinationへのupload共通化と、ModelのReader/placement保持。
+  P0の各arena正確容量・physical量とproduction workspace監査は継続中。予備実測用の
+  `ninfer-suspend-budget` コンテナ（host port 18082）は停止済み。
 - 各実装段階の完了時に、本節へ変更内容、実施した検証、未検証事項、次の作業を記録する。
 - 2026-10-02に実装開始と作業単位ごとのcommitを承認済み。AGENTS.mdのsuspend checkpoint規約に従い、
   検証済み単位をcommitして問題がなければ次段階へ継続する。
@@ -142,12 +153,12 @@ prepareがGPUへ触れる経路が見つかれば同じ実行権の管理対象�
 
 ### P1: Coreのfixed-VA backingとpool統合
 
-- [ ] granularity、overflow、device/context、map/access/handleの寿命を管理するVMM backingを実装する。
-- [ ] VA予約とphysical backingの寿命を分離し、detach中もbase/capacity/offsetを保持する。
-- [ ] 通常arenaにopt-inで接続し、無効時の既存allocation経路を維持する。
-- [ ] weight/KV poolにidle時の全backing detach/attachを追加する。
+- [x] granularity、overflow、device/context、map/access/handleの寿命を管理するVMM backingを実装する。
+- [x] VA予約とphysical backingの寿命を分離し、detach中もbase/capacity/offsetを保持する。
+- [x] 通常arenaにopt-inで接続し、無効時の既存allocation経路を維持する。
+- [x] weight/KV poolにidle時の全backing detach/attachを追加する。
   open transactionやpoisoned状態を拒否し、resume後の貸出も検証する。
-- [ ] allocate/map/accessの途中失敗、move/destructor、反復detach/attachのテストを追加する。
+- [x] allocate/map/accessの途中失敗、move/destructor、反復detach/attachのテストを追加する。
 
 出口条件: 同一VAで新規backingへ復帰し、通常arenaと両poolで二重解放・leakがないこと。
 

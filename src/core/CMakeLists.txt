@@ -1,5 +1,6 @@
 add_library(ninfer_core STATIC
   arena.cu
+  remappable_allocation.cpp
   device.cu
   stage_link.cu
   dtype.cpp

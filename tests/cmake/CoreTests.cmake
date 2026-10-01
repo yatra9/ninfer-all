@@ -36,6 +36,11 @@ ninfer_add_test(ninfer_vmm_suspend_test
   LIBRARIES CUDA::cudart CUDA::cuda_driver)
 set_tests_properties(ninfer_vmm_suspend_test PROPERTIES SKIP_RETURN_CODE 77)
 
+ninfer_add_test(ninfer_suspend_backing_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_suspend_backing.cu"
+  LIBRARIES ninfer_core)
+set_tests_properties(ninfer_suspend_backing_test PROPERTIES SKIP_RETURN_CODE 77)
+
 ninfer_add_test(ninfer_evictable_kv_pool_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_evictable_kv_pool.cu"
   LIBRARIES ninfer_core CUDA::cuda_driver)
