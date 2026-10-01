@@ -1,10 +1,9 @@
 #include "models/qwen3_5/frontend/local_video_prepare.h"
 
 #include "models/qwen3_5/frontend/media_cache.h"
+#include "models/qwen3_5/frontend/vision_patchify.h"
 
 #include <algorithm>
-#include <array>
-#include <bit>
 #include <limits>
 #include <stdexcept>
 
@@ -23,54 +22,11 @@ media::local_video::Deinterlace convert_deinterlace(LocalVideoDeinterlace value)
     throw std::invalid_argument("invalid local video deinterlace mode");
 }
 
-std::uint16_t to_bf16(float value) noexcept {
-    std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
-    bits += 0x7fffU + ((bits >> 16U) & 1U);
-    return static_cast<std::uint16_t>(bits >> 16U);
-}
-
-const std::array<std::uint16_t, 256>& normalization_lut() {
-    static const std::array<std::uint16_t, 256> values = [] {
-        std::array<std::uint16_t, 256> out{};
-        for (std::size_t value = 0; value < out.size(); ++value) {
-            out[value] = to_bf16(static_cast<float>(value) / 127.5f - 1.0f);
-        }
-        return out;
-    }();
-    return values;
-}
-
 std::size_t checked_elements(std::size_t patches) {
     if (patches > std::numeric_limits<std::size_t>::max() / kPreparedVisionPatchFeatures) {
         throw std::overflow_error("local video patch payload exceeds size_t");
     }
     return patches * kPreparedVisionPatchFeatures;
-}
-
-void append_patch(const media::local_video::Frame& first,
-                  const media::local_video::Frame& second, int grid_y, int grid_x,
-                  std::span<std::uint16_t> output, std::size_t& cursor) {
-    if (cursor > output.size() || output.size() - cursor < kPreparedVisionPatchFeatures) {
-        throw std::logic_error("local video patch writer exceeded its allocation");
-    }
-    const std::array<const media::local_video::Frame*, 2> frames{&first, &second};
-    const auto& lut = normalization_lut();
-    std::uint16_t* destination = output.data() + cursor;
-    std::size_t local = 0;
-    for (int channel = 0; channel < 3; ++channel) {
-        for (const media::local_video::Frame* frame : frames) {
-            for (int y = 0; y < 16; ++y) {
-                const std::uint8_t* source =
-                    frame->rgb.data() +
-                    (static_cast<std::size_t>(grid_y * 16 + y) * frame->width + grid_x * 16) * 3 +
-                    channel;
-                for (int x = 0; x < 16; ++x) {
-                    destination[local++] = lut[source[static_cast<std::size_t>(x) * 3]];
-                }
-            }
-        }
-    }
-    cursor += local;
 }
 
 } // namespace
@@ -144,8 +100,11 @@ LocalVideoPayloadReader::read_chunk(std::size_t chunk_index) {
             for (int block_x = 0; block_x < impl_->input->prompt.grid_width / 2; ++block_x) {
                 for (int merge_y = 0; merge_y < 2; ++merge_y) {
                     for (int merge_x = 0; merge_x < 2; ++merge_x) {
-                        append_patch(first, second, block_y * 2 + merge_y,
-                                     block_x * 2 + merge_x, payload->mutable_span(), cursor);
+                        append_vision_patch_pair(
+                            RgbFrameView{first.width, first.height, first.rgb},
+                            RgbFrameView{second.width, second.height, second.rgb},
+                            block_y * 2 + merge_y, block_x * 2 + merge_x,
+                            payload->mutable_span(), cursor);
                     }
                 }
             }

@@ -5,6 +5,7 @@
 #include "models/qwen3_5/frontend/local_video_plan.h"
 #include "models/qwen3_5/frontend/local_video_prepare.h"
 #include "models/qwen3_5/frontend/media_cache.h"
+#include "models/qwen3_5/frontend/vision_patchify.h"
 
 #include <algorithm>
 #include <array>
@@ -238,48 +239,15 @@ void resize_bicubic(media::decode::Image& input, Size size, const PreparationCon
     input = std::move(out);
 }
 
-std::uint16_t to_bf16(float value) noexcept {
-    std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
-    bits += 0x7fffU + ((bits >> 16U) & 1U);
-    return static_cast<std::uint16_t>(bits >> 16U);
-}
-
-const std::array<std::uint16_t, 256>& normalization_lut() {
-    static const std::array<std::uint16_t, 256> values = [] {
-        std::array<std::uint16_t, 256> out{};
-        for (std::size_t value = 0; value < out.size(); ++value) {
-            out[value] = to_bf16(static_cast<float>(value) / 127.5f - 1.0f);
-        }
-        return out;
-    }();
-    return values;
-}
-
 void append_patch(const std::vector<const media::decode::Image*>& frames, int grid_y, int grid_x,
                   std::span<std::uint16_t> out, std::size_t& cursor) {
-    if (cursor > out.size() || out.size() - cursor < kPatchFeatures) {
-        throw std::logic_error("Vision patch writer exceeded its allocation");
+    if (frames.size() != kTemporal || frames[0] == nullptr || frames[1] == nullptr) {
+        throw std::invalid_argument("Vision patch pair requires two frames");
     }
-    const auto& lut            = normalization_lut();
-    std::uint16_t* destination = out.data() + cursor;
-    std::size_t local          = 0;
-    for (int channel = 0; channel < 3; ++channel) {
-        for (int temporal = 0; temporal < kTemporal; ++temporal) {
-            const media::decode::Image& frame = *frames[static_cast<std::size_t>(temporal)];
-            for (int y = 0; y < kPatch; ++y) {
-                const std::uint8_t* source =
-                    frame.rgb.data() +
-                    (static_cast<std::size_t>(grid_y * kPatch + y) * frame.width +
-                     grid_x * kPatch) *
-                        3 +
-                    channel;
-                for (int x = 0; x < kPatch; ++x) {
-                    destination[local++] = lut[source[static_cast<std::size_t>(x) * 3]];
-                }
-            }
-        }
-    }
-    cursor += local;
+    const auto view = [](const media::decode::Image& frame) {
+        return RgbFrameView{.width = frame.width, .height = frame.height, .rgb = frame.rgb};
+    };
+    append_vision_patch_pair(view(*frames[0]), view(*frames[1]), grid_y, grid_x, out, cursor);
 }
 
 void add_budget(PreprocessStats& stats, const VisionItem& item);

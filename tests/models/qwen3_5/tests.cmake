@@ -40,6 +40,10 @@ ninfer_add_test(ninfer_qwen3_5_local_video_plan_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_local_video_plan.cpp"
   LIBRARIES ninfer_engine ninfer_core)
 
+ninfer_add_test(ninfer_qwen3_5_vision_patchify_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_vision_patchify.cpp"
+  LIBRARIES ninfer_engine ninfer_core)
+
 ninfer_add_test(ninfer_qwen3_5_chat_template_prefix_stability_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_chat_template_prefix_stability.cpp"
   NEEDS_SOURCE_DIR
