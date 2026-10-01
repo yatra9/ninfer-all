@@ -21,6 +21,10 @@ benchmark-report, and external protocol behavior. Repository verification princi
   consumer.
 
 Tests are grouped by observable risk, not by mirroring every source file or class.
+`ninfer_vmm_suspend_test` is the GPU suspend prerequisite PoC: it releases and creates
+physical backing at the same three reserved addresses 1000 times, replays one captured
+GraphExec, checks the complete persistent snapshot and its internal pointers, and poisons
+fresh workspace before each replay. It returns CTest skip code 77 without usable CUDA/VMM.
 `CMakeLists.txt` includes explicit registrations from `cmake/`, `artifact/`, `models/qwen3_5/`
 and `ops/`. Registration helpers live in `cmake/NinferTests.cmake`; included manifests keep
 executables and CTest working directories under `build/tests/`.

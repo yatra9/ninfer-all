@@ -31,6 +31,11 @@ ninfer_add_test(ninfer_vmm_graph_remap_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_vmm_graph_remap.cu"
   LIBRARIES ninfer_core CUDA::cuda_driver)
 
+ninfer_add_test(ninfer_vmm_suspend_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_vmm_suspend.cu"
+  LIBRARIES CUDA::cudart CUDA::cuda_driver)
+set_tests_properties(ninfer_vmm_suspend_test PROPERTIES SKIP_RETURN_CODE 77)
+
 ninfer_add_test(ninfer_evictable_kv_pool_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_evictable_kv_pool.cu"
   LIBRARIES ninfer_core CUDA::cuda_driver)
