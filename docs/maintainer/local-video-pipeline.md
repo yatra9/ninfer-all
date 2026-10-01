@@ -34,10 +34,9 @@ projection, layer norms, MLPs, and the spatial merger are row-local outside that
 attention. These facts make a contiguous range of complete temporal groups an exact execution
 unit, subject to the same BF16 operations and group order.
 
-The current `VisionPrefillSession` nevertheless encodes the whole media item before scattering
-columns into text prefill chunks. Text prefill chunking does not bound the item's BF16 patch payload
-or Vision encode workspace. Raising the current one-item limit would retain the whole prepared
-video and size the encode workspace for it.
+Ordinary eager media is still encoded as one item before its columns are scattered into text
+prefill chunks. Local video takes the chunk path below, so its BF16 payload and Vision workspace
+are bounded by `--vision-max-merged` even when the logical video is much larger.
 
 ## Logical item and execution chunk
 
@@ -70,7 +69,6 @@ only the exact `ninfer-video://` prefix, parses every supported query field once
 `LocalVideoSpec`, rejects unknown and duplicate fields, and rejects malformed encoding and numeric
 values. `authorize_local_path` requires an explicit media root and uses canonical component paths
 to reject traversal, sibling-prefix matches, and symlink escapes before a decoder opens the file.
-The serving option and typed handoff are connected in the following integration checkpoint.
 `--local-media-root` now supplies that explicit process policy as an absolute container path; its
 empty default keeps `ninfer-video` disabled.
 
@@ -78,7 +76,7 @@ Chat Completions `video_url` and Responses `input_video.video_url` now classify 
 as `SourceKind::LocalVideo`. Generation acquisition parses and authorizes it before byte
 acquisition, then stores the canonical path and resolved selection controls in
 `OwnedMedia::local_video`. Ordinary HTTP(S) and data inputs retain the byte-backed member. The
-frontend materializer does not consume this new alternative yet.
+frontend materializer consumes this alternative without converting it back to encoded bytes.
 
 Frontend owns Qwen geometry, temporal pairing, timestamps, placeholder layout, total token/context
 budget, and the immutable logical video plan. It computes all prompt-visible metadata before
@@ -98,26 +96,26 @@ The host lifetime is bounded by decoder/filter history, one reader lookahead fra
 for the current chunk, and its BF16 patches. A chunk's BF16 patches may be released after encoding.
 Its merged embeddings remain until every text prefill chunk that references them has completed.
 
-## Proposed typed boundary
+## Implemented typed boundary
 
-The implementation should introduce an explicit alternative to an eager `PreparedMediaPayload`:
+The implementation uses an explicit alternative to an eager `PreparedMediaPayload`:
 
 ```cpp
-struct LocalVideoPlan;          // immutable whole-item metadata and authorized source handle
+struct PreparedLocalVideoInput; // immutable whole-item metadata and authorized source handle
 struct LocalVideoChunkPlan;     // temporal begin/count and corresponding global spans
 
-class LocalVideoMaterializer {
+class LocalVideoPayloadReader {
 public:
-    PreparedMediaPayload materialize(const LocalVideoChunkPlan&,
-                                     const PreparationControl&);
+    std::shared_ptr<PreparedMediaPayload> read_chunk(std::size_t chunk_index);
 };
 ```
 
-Exact names may follow the surrounding code, but the distinction is required. `PreparedPromptData`
-must be able to describe an eager payload or a local-video plan without null pointers standing for
-an undocumented state. Request planning validates total item metadata and each chunk extent.
-`VisionPrefillSession` obtains a materialized payload through the typed provider, encodes it, and
-releases it with the existing request cleanup and exception guarantees.
+`PreparedPromptData::local_videos` is indexed one-to-one with `vision_items`; an ordinary eager
+item has a null local-video slot, while a local video has a typed plan and a null eager payload.
+Request planning validates total item metadata and each chunk extent. `VisionPrefillSession`
+creates one request-owned reader, obtains each payload in plan order, encodes it, and releases it
+with the existing request cleanup and exception guarantees. Cancellation and the request deadline
+are checked during decode and at patchification row boundaries.
 
 The current `VisionItemControl` is item-wide. Chunk execution needs a control view containing the
 chunk's group count, patch range, position arrays, merged count, and the original global scatter
@@ -142,9 +140,10 @@ file size, and modification time. An unchanged path reuses its completed frame i
 requests. A changed file publishes a new source; active requests retain the old source and its
 unchanged checks reject mutation safely. Eviction drops only the cache reference, so it cannot
 invalidate an active reader. A failed or cancelled scan is not published by `VideoSource`.
-This cache is independent of prompt prefix reuse. The first implementation marks local-video prompt identity non-reusable,
-because path and modification metadata are not a content digest and pixels are materialized after
-prompt preparation. A later strong content identity requires a separate contract and validation.
+This cache is independent of prompt prefix reuse. The first implementation marks local-video
+prompt identity non-reusable, because path and modification metadata are not a content digest and
+pixels are materialized after prompt preparation. A later strong content identity requires a
+separate contract and validation.
 
 ## Limits and failure
 
@@ -158,16 +157,16 @@ file mutation poison the request. No partial prompt is published as success. Rea
 destruction stops background work before releasing request-owned state. Overlay restoration and
 the existing Program transaction cleanup remain authoritative for GPU failure recovery.
 
-## Qualification boundary
+## Qualification evidence
 
-The first production change must prove the group-slicing premise before raising limits:
+The CPU payload regression concatenates every chunk from a deterministic H.264 video and compares
+all BF16 patch elements exactly with an independently decoded full payload. Runtime control tests
+compare prompt token IDs, token types, positions, timestamps, patch ranges, and global scatter
+columns exactly.
 
-1. Generate one deterministic multi-group BF16 patch payload.
-2. Encode it once as one item and again as consecutive complete-group chunks.
-3. Concatenate chunk outputs in group order and compare with the one-item output under the existing
-   Vision numerical qualification tolerance, for resident and overlay routes used by this fork.
-4. Compare prompt token IDs, token types, positions, timestamps, and global scatter columns exactly.
-
-CPU decoder tests prove media selection and preprocessing, but do not prove this Vision equivalence.
-The 96Ki target is accepted only after the real RTX 3090 model path also demonstrates bounded host
-patch memory, bounded Vision workspace, correct cleanup, and a successful response.
+On the RTX 3090 target, the same 256-token video was executed through overlay Vision once with a
+256-token envelope and once as four 64-token chunks. The greedy first token matched, its logprob
+differed by 0.07572, and 19 of the top 20 alternatives were shared, within the repository's
+existing real-Vision qualification criterion. A 1024x768, 256-frame input completed as 98,304
+Vision tokens in seven chunks. A client disconnect during that workload cancelled the request and
+the next media request completed, demonstrating request cleanup and overlay restoration.
