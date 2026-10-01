@@ -459,6 +459,9 @@ VisionPrefillSession::VisionPrefillSession(
     validate_plan();
     encoded_payloads_pending_release_.reserve(plan_.uses.size());
     timers_.reserve(plan_.uses.size());
+#ifndef _WIN32
+    local_video_readers_.resize(prompt_.vision_items.size());
+#endif
 }
 
 VisionPrefillSession::VisionPrefillSession(
@@ -497,6 +500,9 @@ VisionPrefillSession::VisionPrefillSession(
     }
     validate_plan();
     encoded_payloads_pending_release_.reserve(plan_.uses.size());
+#ifndef _WIN32
+    local_video_readers_.resize(prompt_.vision_items.size());
+#endif
 }
 
 VisionPrefillSession::~VisionPrefillSession() = default;
