@@ -271,4 +271,51 @@ VisionItemControl slice_vision_control(const VisionItemControl& item,
     return out;
 }
 
+VisionControl
+build_vision_execution_control(const PreparedPromptData& prompt, const VisionControlPlan& plan,
+                               std::span<const VisionExecutionSlice> slices) {
+    if (slices.empty()) {
+        throw std::invalid_argument("Vision execution control has no slices");
+    }
+    const std::uint32_t first_item = slices.front().prepared_item_index;
+    VisionControl full = build_vision_control(prompt, plan, first_item);
+    VisionControl output;
+    output.prepared_item_begin = first_item;
+    output.items.reserve(slices.size());
+    std::uint32_t previous_item = first_item;
+    std::int32_t previous_temporal_end = 0;
+    for (const VisionExecutionSlice& slice : slices) {
+        if (slice.prepared_item_index < first_item ||
+            slice.prepared_item_index >= prompt.vision_items.size() ||
+            slice.prepared_item_index < previous_item) {
+            throw std::invalid_argument("Vision execution slices are not in prepared item order");
+        }
+        const auto control_index = slice.prepared_item_index - first_item;
+        if (control_index >= full.items.size()) {
+            throw std::logic_error("Vision execution slice has no full-item control");
+        }
+        if (slice.temporal_count == 0) {
+            output.items.push_back(full.items[control_index]);
+            previous_temporal_end = 0;
+        } else {
+            if (slice.temporal_begin < 0 ||
+                (slice.prepared_item_index == previous_item &&
+                 slice.temporal_begin < previous_temporal_end)) {
+                throw std::invalid_argument("Vision execution temporal slices overlap");
+            }
+            output.items.push_back(slice_vision_control(full.items[control_index],
+                                                        slice.temporal_begin,
+                                                        slice.temporal_count));
+            previous_temporal_end = slice.temporal_begin + slice.temporal_count;
+        }
+        if (slice.prepared_item_index != previous_item) {
+            previous_temporal_end = slice.temporal_count == 0
+                                        ? 0
+                                        : slice.temporal_begin + slice.temporal_count;
+        }
+        previous_item = slice.prepared_item_index;
+    }
+    return output;
+}
+
 } // namespace ninfer::models::qwen3_5

@@ -20,6 +20,10 @@
 #include <span>
 #include <vector>
 
+namespace ninfer::models::qwen3_5::frontend {
+class LocalVideoPayloadReader;
+}
+
 namespace ninfer::models::qwen3_5::execution {
 
 using detail::VisionWorkspacePlan;
@@ -119,6 +123,8 @@ public:
 private:
     void validate_plan() const;
     void submit_cpu_item(std::size_t use_index);
+    [[nodiscard]] std::shared_ptr<const PreparedMediaPayload>
+    payload_for(const VisionUseSpan& use);
 
     DeviceContext& device_;
     const execution::Parameters& parameters_;
@@ -140,6 +146,10 @@ private:
     std::uint32_t active_use_end_     = 0;
     std::size_t active_handoff_bytes_ = 0;
     std::vector<std::uint32_t> encoded_payloads_pending_release_;
+#ifndef _WIN32
+    std::vector<std::unique_ptr<qwen3_5::frontend::LocalVideoPayloadReader>> local_video_readers_;
+#endif
+    std::shared_ptr<const PreparedMediaPayload> active_payload_;
     std::vector<CudaEventTimer> timers_;
 };
 

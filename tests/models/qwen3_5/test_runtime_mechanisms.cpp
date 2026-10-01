@@ -412,6 +412,23 @@ void test_vision_control() {
                first.position_table_indices == second.position_table_indices &&
                first.position_table_weights == second.position_table_weights,
            "temporal slices preserve repeated spatial positions");
+    const std::array<q36::VisionExecutionSlice, 3> execution_slices{
+        q36::VisionExecutionSlice{.prepared_item_index = 0},
+        q36::VisionExecutionSlice{.prepared_item_index = 1,
+                                  .temporal_begin = 0,
+                                  .temporal_count = 1},
+        q36::VisionExecutionSlice{.prepared_item_index = 1,
+                                  .temporal_begin = 1,
+                                  .temporal_count = 1},
+    };
+    const q36::VisionControl execution =
+        q36::build_vision_execution_control(prompt, plan, execution_slices);
+    expect(execution.items.size() == 3 && execution.items[0].patch_count == 4 &&
+               execution.items[1].patch_begin == 4 && execution.items[1].patch_count == 4 &&
+               execution.items[2].patch_begin == 8 && execution.items[2].patch_count == 4 &&
+               execution.items[1].scatter_indices == std::vector<std::int32_t>({3}) &&
+               execution.items[2].scatter_indices == std::vector<std::int32_t>({5}),
+           "execution control expands one logical video into ordered temporal slices");
     const q36::VisionItemControl whole = q36::slice_vision_control(video, 0, 2);
     expect(whole.patch_begin == video.patch_begin && whole.patch_count == video.patch_count &&
                whole.merged_count == video.merged_count &&

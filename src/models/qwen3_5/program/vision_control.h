@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace ninfer::models::qwen3_5 {
@@ -40,11 +41,20 @@ struct VisionControlPlan {
     std::vector<VisionItemControlPlan> items;
 };
 
+struct VisionExecutionSlice {
+    std::uint32_t prepared_item_index = 0;
+    std::int32_t temporal_begin = 0;
+    std::int32_t temporal_count = 0; // zero selects the complete item
+};
+
 [[nodiscard]] VisionControlPlan plan_vision_control(const PreparedPromptData& prompt,
                                                     const VisionConfig& config);
 [[nodiscard]] VisionControl build_vision_control(const PreparedPromptData& prompt,
                                                  const VisionControlPlan& plan,
                                                  std::uint32_t prepared_item_begin);
+[[nodiscard]] VisionControl
+build_vision_execution_control(const PreparedPromptData& prompt, const VisionControlPlan& plan,
+                               std::span<const VisionExecutionSlice> slices);
 // Returns an execution view over complete, contiguous temporal groups. Prompt-visible scatter
 // indices remain global; patch and position storage is narrowed to the requested groups.
 [[nodiscard]] VisionItemControl slice_vision_control(const VisionItemControl& item,

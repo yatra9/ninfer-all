@@ -3,6 +3,9 @@
 #include "models/qwen3_5/program/planning/rebuild_work.h"
 #include "models/qwen3_5/program/context.h"
 #include "models/qwen3_5/program/context_work.h"
+#ifndef _WIN32
+#include "models/qwen3_5/frontend/local_video_prepare.h"
+#endif
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -229,10 +232,15 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
         prompt.media_payloads.size() != prompt.vision_items.size()) {
         throw std::invalid_argument("prepared prompt media payload is incomplete");
     }
+    if (!prompt.local_videos.empty() && prompt.local_videos.size() != prompt.vision_items.size()) {
+        throw std::invalid_argument("prepared prompt local video plan is incomplete");
+    }
     for (std::size_t i = 0; i < prompt.media_payloads.size(); ++i) {
-        if (!prompt.media_payloads[i] ||
-            prompt.media_payloads[i]->patch_elements !=
-                prompt.vision_items[i].patch_count * kPreparedVisionPatchFeatures) {
+        const bool local = !prompt.local_videos.empty() && prompt.local_videos[i] != nullptr;
+        if ((!local && (!prompt.media_payloads[i] ||
+                        prompt.media_payloads[i]->patch_elements !=
+                            prompt.vision_items[i].patch_count * kPreparedVisionPatchFeatures)) ||
+            (local && prompt.media_payloads[i])) {
             throw std::invalid_argument("prepared prompt media item payload has an invalid shape");
         }
     }
@@ -318,8 +326,29 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
                 throw std::invalid_argument("vision item consumer spans overlap");
             }
             // The CPU residency encodes on host threads, so only the merged extent binds it.
-            if (item.merged_count > workspace_plan.vision->max_merged_tokens ||
+            const bool local = !prompt.local_videos.empty() && prompt.local_videos[index];
+#ifndef _WIN32
+            if (local) {
+                for (const auto& chunk : prompt.local_videos[index]->prompt.chunks) {
+                    const std::size_t raw_patches =
+                        chunk.temporal_count *
+                        static_cast<std::size_t>(prompt.vision_items[index].grid.height) *
+                        static_cast<std::size_t>(prompt.vision_items[index].grid.width);
+                    if (chunk.token_count > workspace_plan.vision->max_merged_tokens ||
+                        (!parameters.model.cpu_vision() &&
+                         execution::VisionContext::workspace_bytes(
+                             *parameters.model.config().vision, *parameters.vision, raw_patches,
+                             static_cast<std::size_t>(chunk.token_count), *workspace_plan.vision) >
+                             workspace_plan.vision->encode_peak_bytes)) {
+                        throw std::invalid_argument(
+                            "local video chunk exceeds the Program workspace envelope");
+                    }
+                }
+            }
+#endif
+            if ((!local && item.merged_count > workspace_plan.vision->max_merged_tokens) ||
                 (!parameters.model.cpu_vision() &&
+                 !local &&
                  execution::VisionContext::workspace_bytes(
                      *parameters.model.config().vision, *parameters.vision,
                      prompt.vision_items[index].patch_count, item.merged_count,
@@ -749,6 +778,42 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
         for (std::size_t index = 0; index < base.vision_control_plan->items.size(); ++index) {
             const qwen3_5::VisionItemControlPlan& item = base.vision_control_plan->items[index];
             if (item.token_end <= plan->reuse_base) { continue; }
+#ifndef _WIN32
+            const auto local = !prompt.local_videos.empty() ? prompt.local_videos[index] : nullptr;
+            if (local) {
+                const qwen3_5::VisionItem& prepared = prompt.vision_items[index];
+                for (std::size_t chunk_index = 0; chunk_index < local->prompt.chunks.size();
+                     ++chunk_index) {
+                    const auto& chunk = local->prompt.chunks[chunk_index];
+                    const std::size_t first = chunk.temporal_begin;
+                    const std::size_t last = first + chunk.temporal_count - 1;
+                    if (last >= prepared.token_spans.size()) {
+                        throw std::logic_error("local video chunk exceeds its prompt token spans");
+                    }
+                    const TokenSpan& first_span = prepared.token_spans[first];
+                    const TokenSpan& last_span = prepared.token_spans[last];
+                    const std::uint32_t token_begin =
+                        static_cast<std::uint32_t>(first_span.begin);
+                    const std::uint32_t token_end =
+                        static_cast<std::uint32_t>(last_span.begin + last_span.count);
+                    if (token_end <= plan->reuse_base) { continue; }
+                    const std::uint32_t begin = plan->prepare_mtp && token_begin != 0
+                                                    ? token_begin - 1
+                                                    : token_begin;
+                    vision.uses.push_back(VisionUseSpan{
+                        .begin = begin,
+                        .end = token_end,
+                        .prepared_item_index = static_cast<std::uint32_t>(index),
+                        .temporal_begin = static_cast<std::int32_t>(chunk.temporal_begin),
+                        .temporal_count = static_cast<std::int32_t>(chunk.temporal_count),
+                        .local_chunk_index = static_cast<std::uint32_t>(chunk_index),
+                    });
+                    max_merged = std::max(max_merged,
+                                          static_cast<std::size_t>(chunk.token_count));
+                }
+                continue;
+            }
+#endif
             const std::uint32_t begin = plan->prepare_mtp && item.token_begin != 0
                                             ? item.token_begin - 1
                                             : item.token_begin;

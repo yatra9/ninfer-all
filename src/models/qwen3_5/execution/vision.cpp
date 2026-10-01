@@ -5,6 +5,9 @@
 #include "core/layout.h"
 #include "core/nvtx.h"
 #include "models/qwen3_5/program/vision_control.h"
+#ifndef _WIN32
+#include "models/qwen3_5/frontend/local_video_prepare.h"
+#endif
 #include "ninfer/ops/add_bias.h"
 #include "ninfer/ops/gelu.h"
 #include "ninfer/ops/layer_norm.h"
@@ -475,6 +478,9 @@ VisionPrefillSession::VisionPrefillSession(
     }
     validate_plan();
     encoded_payloads_pending_release_.reserve(plan_.uses.size());
+#ifndef _WIN32
+    local_video_readers_.resize(prompt_.vision_items.size());
+#endif
 }
 
 VisionPrefillSession::VisionPrefillSession(
@@ -512,8 +518,7 @@ void VisionPrefillSession::validate_plan() const {
         if (use.control_index >= plan_.control->items.size() ||
             use.prepared_item_index >= prompt_.vision_items.size() ||
             use.prepared_item_index >= prompt_.media_payloads.size() ||
-            plan_.control->prepared_item_begin + use.control_index != use.prepared_item_index ||
-            (previous_item && use.prepared_item_index <= *previous_item)) {
+            (previous_item && use.prepared_item_index < *previous_item)) {
             throw std::invalid_argument("Vision suffix item indices are invalid or unordered");
         }
         const qwen3_5::VisionItemControl& control = plan_.control->items[use.control_index];
@@ -522,10 +527,13 @@ void VisionPrefillSession::validate_plan() const {
             use.end != static_cast<std::uint32_t>(control.scatter_indices.back()) + 1U ||
             (use.begin != static_cast<std::uint32_t>(control.scatter_indices.front()) &&
              use.begin + 1U != static_cast<std::uint32_t>(control.scatter_indices.front())) ||
-            source.modality != control.modality || source.grid.temporal != control.grid.temporal ||
+            source.modality != control.modality ||
+            (use.temporal_count == 0 && source.grid.temporal != control.grid.temporal) ||
+            (use.temporal_count != 0 && control.grid.temporal != use.temporal_count) ||
             source.grid.height != control.grid.height || source.grid.width != control.grid.width ||
-            source.patch_begin != control.patch_begin ||
-            source.patch_count != control.patch_count) {
+            control.patch_begin < source.patch_begin ||
+            control.patch_count > source.patch_count ||
+            control.patch_begin - source.patch_begin > source.patch_count - control.patch_count) {
             throw std::invalid_argument("Vision suffix plan does not describe the prepared item");
         }
         if (control.merged_count > plan_.max_merged_count) {
@@ -540,9 +548,12 @@ void VisionPrefillSession::validate_plan() const {
             control.patch_count,
             static_cast<std::size_t>(parameters_.model.config().vision.value().patch_width()),
             "item patch elements");
+        const bool local = !prompt_.local_videos.empty() &&
+                           prompt_.local_videos[use.prepared_item_index] != nullptr;
         const auto& payload = prompt_.media_payloads[use.prepared_item_index];
-        if (output_bytes > workspace_plan_.handoff_capacity_bytes || !payload ||
-            payload->patch_elements != patch_elements) {
+        if (output_bytes > workspace_plan_.handoff_capacity_bytes ||
+            (!local && (!payload || payload->patch_elements != patch_elements)) ||
+            (local && (payload || use.temporal_count == 0))) {
             throw std::invalid_argument("Vision suffix item storage has an invalid shape");
         }
         previous_end  = use.end;
@@ -555,6 +566,23 @@ void VisionPrefillSession::validate_plan() const {
                      })) {
         throw std::invalid_argument("Vision request workspace extent has no matching suffix item");
     }
+}
+
+std::shared_ptr<const PreparedMediaPayload>
+VisionPrefillSession::payload_for(const VisionUseSpan& use) {
+    const bool local = !prompt_.local_videos.empty() &&
+                       prompt_.local_videos[use.prepared_item_index] != nullptr;
+    if (!local) { return prompt_.media_payloads[use.prepared_item_index]; }
+#ifdef _WIN32
+    throw std::logic_error("local video payload requested by a native Windows build");
+#else
+    auto& reader = local_video_readers_[use.prepared_item_index];
+    if (!reader) {
+        reader = std::make_unique<qwen3_5::frontend::LocalVideoPayloadReader>(
+            *prompt_.local_videos[use.prepared_item_index]);
+    }
+    return reader->read_chunk(use.local_chunk_index);
+#endif
 }
 
 VisionChunk VisionPrefillSession::prepare_chunk(std::uint32_t begin, std::uint32_t nominal_length) {
@@ -581,35 +609,37 @@ VisionChunk VisionPrefillSession::prepare_chunk(std::uint32_t begin, std::uint32
     }
     const qwen3_5::VisionItemControl& control = plan_.control->items[active->control_index];
     if (overlay_ != nullptr || cpu_ != nullptr) {
-        if (!active_item_ || *active_item_ != active->prepared_item_index) {
-            if (submitted_item_ && *submitted_item_ == active->prepared_item_index) {
+        if (!active_item_ || *active_item_ != active->control_index) {
+            if (submitted_item_ && *submitted_item_ == active->control_index) {
                 // Submitted ahead of this unit: the encode already ran beside other lanes.
                 host_result_ =
                     overlay_ != nullptr ? overlay_->complete_item() : cpu_->complete_item();
                 submitted_item_.reset();
             } else {
-                const auto& payload = prompt_.media_payloads[active->prepared_item_index];
+                active_payload_ = payload_for(*active);
+                const auto& payload = active_payload_;
                 host_result_ = overlay_ != nullptr ? overlay_->encode_item(payload->span(), control)
                                                    : cpu_->encode_item(payload, control);
             }
             active_use_end_ = active->end;
             // The following item encodes on CPU threads while this one's chunks prefill.
             if (cpu_ != nullptr) { submit_cpu_item(next_use_ + 1U); }
-            active_item_ = active->prepared_item_index;
+            active_item_ = active->control_index;
             encoded_payloads_pending_release_.push_back(active->prepared_item_index);
         }
         return VisionChunk{static_cast<std::int32_t>(end - begin), &control, {}, host_result_};
     }
     Tensor output = VisionContext::bind_output(workspace_, workspace_plan_, control.merged_count);
 
-    if (!active_item_ || *active_item_ != active->prepared_item_index) {
-        const auto& payload = prompt_.media_payloads[active->prepared_item_index];
+    if (!active_item_ || *active_item_ != active->control_index) {
+        active_payload_ = payload_for(*active);
+        const auto& payload = active_payload_;
         timers_.emplace_back(device_);
         timers_.back().start();
         context_->encode(VisionItemView{payload->span(), &control}, output, workspace_,
                          workspace_plan_);
         timers_.back().record_stop();
-        active_item_          = active->prepared_item_index;
+        active_item_          = active->control_index;
         active_handoff_bytes_ = output.bytes();
         handoff_peak_bytes_   = std::max(handoff_peak_bytes_, active_handoff_bytes_);
         encoded_payloads_pending_release_.push_back(active->prepared_item_index);
@@ -647,20 +677,22 @@ void VisionPrefillSession::submit_next_item() {
         return;
     }
     const VisionUseSpan& use = plan_.uses[next_use_];
+    if (!prompt_.local_videos.empty() && prompt_.local_videos[use.prepared_item_index]) { return; }
     const auto& payload      = prompt_.media_payloads[use.prepared_item_index];
     if (!payload) { return; }
     if (overlay_->submit_item(payload->span(), plan_.control->items[use.control_index])) {
-        submitted_item_ = use.prepared_item_index;
+        submitted_item_ = use.control_index;
     }
 }
 
 void VisionPrefillSession::submit_cpu_item(std::size_t use_index) {
     if (cpu_->pending() || use_index >= plan_.uses.size()) { return; }
     const VisionUseSpan& use = plan_.uses[use_index];
+    if (!prompt_.local_videos.empty() && prompt_.local_videos[use.prepared_item_index]) { return; }
     const auto& payload      = prompt_.media_payloads[use.prepared_item_index];
-    if (!payload || (active_item_ && *active_item_ == use.prepared_item_index)) { return; }
+    if (!payload || (active_item_ && *active_item_ == use.control_index)) { return; }
     cpu_->submit_item(payload, plan_.control->items[use.control_index]);
-    submitted_item_ = use.prepared_item_index;
+    submitted_item_ = use.control_index;
 }
 
 bool VisionPrefillSession::vision_pending() const {
@@ -682,6 +714,7 @@ void VisionPrefillSession::release_encoded_media_payloads() noexcept {
         prompt_.media_payloads[item_index].reset();
     }
     encoded_payloads_pending_release_.clear();
+    active_payload_.reset();
 }
 
 void VisionPrefillSession::retire_handoff() noexcept {
