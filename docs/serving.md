@@ -745,10 +745,15 @@ returns HTTP 413 `media_budget_exceeded`. A raw request body that exceeds `--max
 before JSON parsing also returns 413, with the distinct code `request_too_large`.
 
 `ninfer-video` charges each BF16 chunk payload to the same `--media-live-mib` account used by
-ordinary media payloads. Before retaining ordinary payloads, preparation reserves the largest
-local-video chunk required by that prompt; all of its local videos reuse this one serial chunk
-reservation. Decoded RGB remains bounded to the current chunk. Its initial index scan and each
-chunk read observe request cancellation,
+ordinary media payloads. Before retaining ordinary payloads, preparation accounts for the largest
+local-video chunk in the request's live-memory admission. If their combined BF16 payloads
+exceed the configured capacity, preparation returns HTTP 413 before entering a memory wait. After
+ordinary payload preparation completes, it reserves that chunk capacity from the shared account;
+all local videos in the prompt reuse the reservation serially. Decoded RGB remains bounded to the
+current chunk. Media preparation admits one local-video prompt at a time so concurrent mixed
+prompts cannot each retain ordinary payloads while waiting for the others' chunk reservation;
+ordinary-only prompt preparation remains concurrent. Its initial index scan and each chunk read
+observe request cancellation,
 and the source file identity is checked before and after every chunk. A missing local file returns
 HTTP 404 `local_video_not_found`; a canonical path outside `--local-media-root` returns HTTP 403
 `local_video_forbidden`. Token, decoded-pixel, selected-frame, scan, and live-memory limits return

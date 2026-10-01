@@ -121,6 +121,8 @@ public:
     reserve_payload(std::size_t elements, const PreparationControl& control);
 
     [[nodiscard]] MediaPreparationPermit acquire_request(const PreparationControl& control) const;
+    [[nodiscard]] MediaPreparationPermit
+    acquire_local_video_request(const PreparationControl& control) const;
 
     [[nodiscard]] PendingMedia begin_prepare(const MediaCacheKey& key,
                                              const PreparationControl& control, Builder builder);

@@ -107,6 +107,12 @@ struct ProcessorOptions {
 // exceeds merged_tokens after resizing; oversized media downscales instead of being rejected.
 void bound_merged_tokens(ProcessorOptions& options, std::uint64_t merged_tokens);
 
+// Validates the BF16 storage retained by ordinary media together with the one serial local-video
+// chunk reservation. Kept at the frontend boundary so admission happens before a memory wait.
+void validate_request_media_live_capacity(std::uint64_t ordinary_raw_patches,
+                                          std::uint64_t local_video_chunk_elements,
+                                          std::size_t live_capacity_bytes);
+
 struct ProcessedInput {
     bool starts_in_reasoning = false;
     std::vector<int> input_ids;

@@ -244,6 +244,7 @@ struct MediaPreprocessCache::Impl {
               maximum_request_bytes == 0
                   ? 1
                   : std::max<std::size_t>(1, live_capacity_bytes / maximum_request_bytes))),
+          local_video_request_gate(std::make_shared<MediaPreparationGate>(1)),
           workers(std::make_shared<HostWorkerPool>(threads,
                                                    std::max<std::size_t>(64, threads * 8ULL))) {
         if (live_capacity_bytes == 0) {
@@ -325,19 +326,23 @@ struct MediaPreprocessCache::Impl {
             std::unique_lock lock(state->account->mutex);
             state->account->changed.wait_for(lock, std::chrono::milliseconds(10));
         }
+        std::shared_ptr<MediaPayloadReservationState> state_value;
         try {
-            auto state_value = std::make_shared<MediaPayloadReservationState>(state->account, bytes);
-            return std::shared_ptr<MediaPayloadReservation>(
-                new MediaPayloadReservation(std::move(state_value)));
+            state_value = std::make_shared<MediaPayloadReservationState>(state->account, bytes);
         } catch (...) {
             state->account->release(bytes);
             throw;
         }
+        // Once state_value exists, its destructor is the sole owner of releasing the reservation,
+        // including when allocation of the public wrapper below fails.
+        return std::shared_ptr<MediaPayloadReservation>(
+            new MediaPayloadReservation(std::move(state_value)));
     }
 
     const std::uint32_t threads;
     std::shared_ptr<State> state;
     std::shared_ptr<MediaPreparationGate> request_gate;
+    std::shared_ptr<MediaPreparationGate> local_video_request_gate;
     std::shared_ptr<HostWorkerPool> workers;
 };
 
@@ -370,6 +375,19 @@ MediaPreprocessCache::acquire_request(const PreparationControl& control) const {
             return MediaPreparationPermit(impl_->request_gate);
         }
         impl_->request_gate->changed.wait_for(lock, std::chrono::milliseconds(10));
+    }
+}
+
+MediaPreparationPermit
+MediaPreprocessCache::acquire_local_video_request(const PreparationControl& control) const {
+    for (;;) {
+        check_preparation_control(control, "local video media preparation");
+        std::unique_lock lock(impl_->local_video_request_gate->mutex);
+        if (impl_->local_video_request_gate->active == 0) {
+            impl_->local_video_request_gate->active = 1;
+            return MediaPreparationPermit(impl_->local_video_request_gate);
+        }
+        impl_->local_video_request_gate->changed.wait_for(lock, std::chrono::milliseconds(10));
     }
 }
 

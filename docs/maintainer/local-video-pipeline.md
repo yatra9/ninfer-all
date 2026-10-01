@@ -114,13 +114,20 @@ public:
 item has a null local-video slot, while a local video has a typed plan and a null eager payload.
 Request planning validates total item metadata and each chunk extent. `VisionPrefillSession`
 creates one request-owned reader, obtains each payload in plan order, encodes it, and releases it
-with the existing request cleanup and exception guarantees. Before ordinary media payloads are
-retained, prompt preparation reserves enough of the shared media live-memory account for the
-largest local-video chunk. Every local video in that prompt reuses the reservation serially. This
-prevents later ordinary image/video payloads from consuming the chunk capacity and blocking the
-currently executing local video. Cancellation and the request deadline are checked during
-indexing, decode, reservation waits, and patchification row boundaries. Source identity is checked
-before and after every chunk returned to execution.
+with the existing request cleanup and exception guarantees. The largest local-video chunk is added
+to request live-memory admission before ordinary payload builders allocate. After ordinary media
+preparation completes, that chunk capacity is reserved from the shared account; every local video
+in the prompt reuses it serially. A combined request that cannot retain both is rejected before a
+self-dependent memory wait, while an in-budget request cannot lose its execution capacity to later
+ordinary payloads. Cancellation and the request deadline are checked during indexing, decode,
+reservation waits, and patchification row boundaries. Source identity is checked before and after
+every chunk returned to execution.
+
+The shared media cache admits one local-video prompt through media preparation at a time. The
+permit begins before that prompt retains ordinary payloads and ends after its chunk reservation is
+installed. This removes a cross-request hold-and-wait cycle in which several mixed prompts could
+each retain ordinary payloads while waiting for the others' chunk capacity. Ordinary-only prompt
+preparation keeps its existing bounded concurrency.
 
 The current `VisionItemControl` is item-wide. Chunk execution needs a control view containing the
 chunk's group count, patch range, position arrays, merged count, and the original global scatter
@@ -173,7 +180,9 @@ columns exactly. A shared live-memory regression holds one request's chunk while
 materializes the same chunk under a one-chunk capacity: the second waits, proceeds after release,
 and returns the account to zero rather than exceeding the configured capacity. A mixed-media
 regression also retains an ordinary payload after reserving a local chunk and verifies that the
-chunk materializes without waiting for that later payload to be released.
+chunk materializes without waiting for that later payload to be released. Another contention case
+holds the local-video preparation permit, verifies that a second mixed prompt waits before keeping
+payloads, and then admits it when the first permit is released.
 
 On the RTX 3090 target, a real Qwen3.8-27B Vision tower encoded the same deterministic four-group
 patch payload once as a complete item and once as 1+2+1 temporal-group slices. The direct 81,920

@@ -227,13 +227,41 @@ void run(const std::filesystem::path& path) {
         prepared.prompt.chunks.front().temporal_count *
         static_cast<std::size_t>(prepared.prompt.grid_height) * prepared.prompt.grid_width *
         ninfer::models::qwen3_5::kPreparedVisionPatchFeatures * sizeof(std::uint16_t);
+    const std::uint64_t one_chunk_raw_patches =
+        one_chunk_bytes /
+        (ninfer::models::qwen3_5::kPreparedVisionPatchFeatures * sizeof(std::uint16_t));
+    bool combined_live_limit_reported = false;
+    try {
+        fi::validate_request_media_live_capacity(
+            one_chunk_raw_patches, one_chunk_bytes / sizeof(std::uint16_t),
+            one_chunk_bytes * 2 - 1);
+    } catch (const fi::ProcessorError& error) {
+        combined_live_limit_reported =
+            error.kind() == fi::ProcessorErrorKind::BudgetExceeded;
+    }
+    expect(combined_live_limit_reported,
+           "ordinary payload plus local chunk reservation is rejected before a memory wait");
+    fi::validate_request_media_live_capacity(
+        one_chunk_raw_patches, one_chunk_bytes / sizeof(std::uint16_t), one_chunk_bytes * 2);
+
     auto reserved_account = std::make_shared<fi::MediaPreprocessCache>(
         0, one_chunk_bytes * 2, 1, one_chunk_bytes * 2);
+    auto first_local_permit = reserved_account->acquire_local_video_request({});
+    auto second_local_permit = std::async(std::launch::async, [&reserved_account] {
+        return reserved_account->acquire_local_video_request({});
+    });
+    expect(second_local_permit.wait_for(std::chrono::milliseconds(50)) ==
+               std::future_status::timeout,
+           "local-video prompt preparation is serialized before retaining ordinary payloads");
+    first_local_permit.reset();
+    auto admitted_local_permit = second_local_permit.get();
+    admitted_local_permit.reset();
+
     auto reserved = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,
                                                    reserved_account);
-    reserved.payload_reservation = reserved_account->reserve_payload(
-        one_chunk_bytes / sizeof(std::uint16_t), {});
     auto later_image = reserved_account->allocate_payload(
+        one_chunk_bytes / sizeof(std::uint16_t), {});
+    reserved.payload_reservation = reserved_account->reserve_payload(
         one_chunk_bytes / sizeof(std::uint16_t), {});
     fi::LocalVideoPayloadReader reserved_reader(reserved);
     auto reserved_chunk = reserved_reader.read_chunk(0);

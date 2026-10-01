@@ -27,6 +27,25 @@
 #include <vector>
 
 namespace ninfer::models::qwen3_5::frontend {
+
+void validate_request_media_live_capacity(std::uint64_t ordinary_raw_patches,
+                                          std::uint64_t local_video_chunk_elements,
+                                          std::size_t live_capacity_bytes) {
+    if (ordinary_raw_patches >
+        (std::numeric_limits<std::uint64_t>::max() - local_video_chunk_elements) /
+            kPreparedVisionPatchFeatures) {
+        throw std::overflow_error("request media payload elements overflow");
+    }
+    const std::uint64_t combined_elements =
+        ordinary_raw_patches * kPreparedVisionPatchFeatures + local_video_chunk_elements;
+    if (combined_elements > live_capacity_bytes / sizeof(std::uint16_t)) {
+        throw ProcessorError(
+            ProcessorErrorKind::BudgetExceeded,
+            "request media payloads and local video chunk reservation exceed the live-memory "
+            "capacity");
+    }
+}
+
 namespace {
 
 [[noreturn]] void throw_decode_error(const media::decode::Error& error) {
@@ -259,18 +278,36 @@ void enforce_media_resource_limits(const PreprocessStats& stats, const Processor
 // waiting for memory that this same request will never release.
 class ConcurrentMediaBudget {
 public:
-    explicit ConcurrentMediaBudget(const ProcessorOptions& options) : options_(options) {}
+    ConcurrentMediaBudget(const ProcessorOptions& options, std::size_t live_capacity_bytes)
+        : options_(options), live_capacity_bytes_(live_capacity_bytes) {}
+
+    void reserve_local_video(std::uint64_t elements) {
+        const std::uint64_t bytes = checked_mul(elements, sizeof(std::uint16_t),
+                                                "local video reserved payload bytes");
+        std::lock_guard lock(mutex_);
+        reserved_bytes_ = bytes;
+        enforce_live_capacity();
+    }
 
     void claim(const VisionItem& item) {
         std::lock_guard lock(mutex_);
         add_budget(stats_, item);
         enforce_media_resource_limits(stats_, options_);
+        enforce_live_capacity();
     }
 
 private:
+    void enforce_live_capacity() const {
+        validate_request_media_live_capacity(stats_.raw_patches,
+                                             reserved_bytes_ / sizeof(std::uint16_t),
+                                             live_capacity_bytes_);
+    }
+
     const ProcessorOptions& options_;
+    const std::size_t live_capacity_bytes_;
     std::mutex mutex_;
     PreprocessStats stats_;
+    std::uint64_t reserved_bytes_ = 0;
 };
 
 Prepared prepare_image(std::span<const std::uint8_t> bytes, const ProcessorOptions& options,
@@ -995,11 +1032,11 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
     std::vector<PendingMedia> pending_items;
     pending_items.reserve(parts.size());
     std::vector<std::shared_ptr<PreparedLocalVideoInput>> planned_local_videos(parts.size());
-    ConcurrentMediaBudget request_budget(options_);
+    ConcurrentMediaBudget request_budget(options_, media_cache_->stats().live_capacity_bytes);
     std::exception_ptr preparation_error;
     const auto media_phase_started = Clock::now();
-    // Plan local videos first so one execution chunk can be reserved before ordinary media
-    // payloads are retained by this prompt. All local-video chunks execute serially and share it.
+    // Plan local videos first so their largest execution chunk participates in the request's
+    // live-memory admission before ordinary payload builders allocate.
     for (std::size_t part_index = 0; part_index < parts.size(); ++part_index) {
         ChatPart* part = parts[part_index];
         if (!part->media.local_video) { continue; }
@@ -1020,8 +1057,9 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
             break;
         }
     }
+    std::uint64_t maximum_chunk_elements = 0;
+    MediaPreparationPermit local_video_permit;
     if (!preparation_error) {
-        std::uint64_t maximum_chunk_elements = 0;
         for (const auto& local : planned_local_videos) {
             if (!local) { continue; }
             for (const LocalVideoChunkPlan& chunk : local->prompt.chunks) {
@@ -1039,11 +1077,8 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
                 std::overflow_error("local video chunk payload exceeds size_t"));
         } else if (maximum_chunk_elements != 0) {
             try {
-                auto reservation = media_cache_->reserve_payload(
-                    static_cast<std::size_t>(maximum_chunk_elements), control);
-                for (auto& local : planned_local_videos) {
-                    if (local) { local->payload_reservation = reservation; }
-                }
+                request_budget.reserve_local_video(maximum_chunk_elements);
+                local_video_permit = media_cache_->acquire_local_video_request(control);
             } catch (...) {
                 preparation_error = std::current_exception();
                 stop_preparation.store(true, std::memory_order_relaxed);
@@ -1175,6 +1210,21 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
         output.media_payloads.push_back(std::move(media.payload));
         output.local_videos.push_back(nullptr);
     }
+    if (!preparation_error && maximum_chunk_elements != 0) {
+        try {
+            validate_request_media_live_capacity(
+                ordinary_stats.raw_patches, maximum_chunk_elements,
+                media_cache_->stats().live_capacity_bytes);
+            auto reservation = media_cache_->reserve_payload(
+                static_cast<std::size_t>(maximum_chunk_elements), control);
+            for (auto& local : planned_local_videos) {
+                if (local) { local->payload_reservation = reservation; }
+            }
+        } catch (...) {
+            preparation_error = std::current_exception();
+            stop_preparation.store(true, std::memory_order_relaxed);
+        }
+    }
     for (ChatPart* part : parts) { std::vector<std::uint8_t>().swap(part->media.bytes); }
     if (preparation_error) {
         try {
@@ -1188,6 +1238,7 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
     const double media_preprocess_seconds =
         std::chrono::duration<double>(Clock::now() - media_phase_started).count();
     request_permit.reset();
+    local_video_permit.reset();
 
     check_preparation_control(control);
     rendered                    = expand_placeholders(std::move(rendered), items);
