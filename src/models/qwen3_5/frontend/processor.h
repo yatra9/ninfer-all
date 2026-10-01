@@ -20,6 +20,8 @@
 namespace ninfer::models::qwen3_5::frontend {
 
 class MediaPreprocessCache;
+class LocalVideoSourceCache;
+struct PreparedLocalVideoInput;
 
 enum class ProcessorErrorKind {
     BudgetExceeded,
@@ -75,6 +77,7 @@ struct PreprocessStats {
     double media_preprocess_seconds      = 0.0;
     double media_preprocess_work_seconds = 0.0;
     double tokenize_seconds              = 0.0;
+    std::vector<LocalVideoPreparationStats> local_videos;
 
     [[nodiscard]] std::string summary() const;
 };
@@ -96,11 +99,19 @@ struct ProcessorOptions {
     double video_fps                       = 2.0;
     int video_min_frames                   = 4;
     int video_max_frames                   = 768;
+    std::uint64_t max_local_video_tokens   = 98'304;
+    std::uint64_t max_vision_execution_tokens = kMaximumVisionItemTokens;
 };
 
 // Clamps the smart-resize pixel ceilings so one image, or one two-frame video group, never
 // exceeds merged_tokens after resizing; oversized media downscales instead of being rejected.
 void bound_merged_tokens(ProcessorOptions& options, std::uint64_t merged_tokens);
+
+// Validates the BF16 storage retained by ordinary media together with the one serial local-video
+// chunk reservation. Kept at the frontend boundary so admission happens before a memory wait.
+void validate_request_media_live_capacity(std::uint64_t ordinary_raw_patches,
+                                          std::uint64_t local_video_chunk_elements,
+                                          std::size_t live_capacity_bytes);
 
 struct ProcessedInput {
     bool starts_in_reasoning = false;
@@ -112,6 +123,10 @@ struct ProcessedInput {
     std::vector<VisionItem> vision_items;
     // One immutable row-major [raw_patches, 1536] payload per Vision item.
     std::vector<std::shared_ptr<const qwen3_5::PreparedMediaPayload>> media_payloads;
+    // Slots are one-to-one with vision_items. Ordinary media has a null local-video slot; local
+    // video has a null eager payload and an immutable indexed source plan.
+    std::vector<std::shared_ptr<PreparedLocalVideoInput>> local_videos;
+    bool has_local_video = false;
     std::optional<RewriteCheckpointSpec> rewrite_checkpoint;
     std::vector<std::uint32_t> rewrite_execution_frontiers;
     std::vector<std::optional<std::uint32_t>> message_boundaries;
@@ -145,7 +160,8 @@ encode_rendered_chat(const Tokenizer& tokenizer, const RenderedChat& rendered,
 class Processor {
 public:
     Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& chat_template,
-              ProcessorOptions options, std::shared_ptr<MediaPreprocessCache> media_cache);
+              ProcessorOptions options, std::shared_ptr<MediaPreprocessCache> media_cache,
+              std::shared_ptr<LocalVideoSourceCache> local_video_cache = {});
 
     [[nodiscard]] std::size_t count_tokens(std::vector<ChatMessage> messages,
                                            ChatRenderOptions render_options  = {},
@@ -161,6 +177,7 @@ private:
     const CompiledChatTemplate& chat_template_;
     ProcessorOptions options_;
     std::shared_ptr<MediaPreprocessCache> media_cache_;
+    std::shared_ptr<LocalVideoSourceCache> local_video_cache_;
 };
 
 } // namespace ninfer::models::qwen3_5::frontend

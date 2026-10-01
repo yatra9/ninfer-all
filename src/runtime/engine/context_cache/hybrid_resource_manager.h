@@ -305,7 +305,9 @@ public:
         for (const LaneId lane : lanes) { release_lane(lane); }
     }
 
-    void release_failed_commit(std::span<const LaneId> lanes) noexcept {
+    // The Program clears its physical lanes before propagating an execution failure. Reconcile
+    // the ResourceManager's logical ownership without asking the Program to consume them again.
+    void release_after_program_failure(std::span<const LaneId> lanes) noexcept {
         for (const LaneId lane : lanes) {
             if (lane.value < lane_count_ && (lanes_[lane.value] == Lane::Active ||
                                              lanes_[lane.value] == Lane::TerminalPending)) {

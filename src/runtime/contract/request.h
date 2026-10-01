@@ -2,6 +2,7 @@
 
 #include "ninfer/types.h"
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 
@@ -55,6 +56,7 @@ struct OutputDecision {
 // request record owns the flag for longer than Program can retain this view.
 struct CancellationFlagView {
     const std::atomic<bool>* flag = nullptr;
+    std::chrono::steady_clock::time_point deadline;
 
     [[nodiscard]] bool requested() const noexcept {
         return flag != nullptr && flag->load(std::memory_order_acquire);

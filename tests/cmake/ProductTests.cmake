@@ -2,6 +2,12 @@ ninfer_add_test(ninfer_media_decode_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_media_decode.cpp"
   LIBRARIES ninfer_media_decode)
 
+if(NOT WIN32)
+  ninfer_add_test(ninfer_local_video_url_test
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_local_video_url.cpp"
+    LIBRARIES ninfer_local_video_url)
+endif()
+
 ninfer_add_test(ninfer_prompt_input_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_prompt_input.cpp"
   LIBRARIES ninfer_product_prompt_input)

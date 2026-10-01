@@ -11,6 +11,9 @@
 #include "models/qwen3_5/execution/vision.h"
 #include "models/qwen3_5/program/vision_control.h"
 #include "models/qwen3_5/program/vision_prefill.h"
+#ifndef _WIN32
+#include "models/qwen3_5/frontend/local_video_prepare.h"
+#endif
 #include "core/device.h"
 #include "core/startup.h"
 #include "runtime/prefix_cache/block_hash.h"
@@ -565,7 +568,7 @@ ProgramImpl::progress_hybrid_materialization(runtime::CancellationFlagView cance
         }
         out.diagnostics.cached_prefix_tokens = transaction.quote->cached_prefix_tokens;
         out.diagnostics.restored_host_bytes  = transaction.restore_bytes;
-        out.published.emplace(hybrid_activate(transaction));
+        out.published.emplace(hybrid_activate(transaction, cancellation));
     } catch (...) {
         // The abort returns the state slot a landing restore may still be writing.
         if (transaction.restore_ticket != 0) {
@@ -714,7 +717,8 @@ void ProgramImpl::hybrid_abort_materialization(
     } catch (...) { std::terminate(); }
 }
 
-StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& transaction) {
+StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& transaction,
+                                         runtime::CancellationFlagView cancellation) {
     const HybridQuoteImpl& quote = *transaction.quote;
     PreparedPromptData& prompt   = transaction.prompt;
     const std::uint32_t lane     = quote.destination;
@@ -894,6 +898,38 @@ StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& trans
                 const qwen3_5::VisionItemControlPlan& item =
                     quote.vision_control_plan->items[index_item];
                 if (item.token_end <= reuse) { continue; }
+#ifndef _WIN32
+                const auto local = !prompt.local_videos.empty()
+                                       ? prompt.local_videos[index_item]
+                                       : nullptr;
+                if (local) {
+                    const qwen3_5::VisionItem& prepared = prompt.vision_items[index_item];
+                    for (std::size_t chunk_index = 0; chunk_index < local->prompt.chunks.size();
+                         ++chunk_index) {
+                        const auto& chunk = local->prompt.chunks[chunk_index];
+                        const std::size_t first = chunk.temporal_begin;
+                        const std::size_t last = first + chunk.temporal_count - 1;
+                        const TokenSpan& first_span = prepared.token_spans.at(first);
+                        const TokenSpan& last_span = prepared.token_spans.at(last);
+                        const auto token_begin = static_cast<std::uint32_t>(first_span.begin);
+                        const auto token_end =
+                            static_cast<std::uint32_t>(last_span.begin + last_span.count);
+                        if (token_end <= reuse) { continue; }
+                        plan.uses.push_back(VisionUseSpan{
+                            .begin = prepare_mtp && token_begin != 0 ? token_begin - 1
+                                                                    : token_begin,
+                            .end = token_end,
+                            .prepared_item_index = static_cast<std::uint32_t>(index_item),
+                            .temporal_begin = static_cast<std::int32_t>(chunk.temporal_begin),
+                            .temporal_count = static_cast<std::int32_t>(chunk.temporal_count),
+                            .local_chunk_index = static_cast<std::uint32_t>(chunk_index),
+                        });
+                        max_merged = std::max(max_merged,
+                                              static_cast<std::size_t>(chunk.token_count));
+                    }
+                    continue;
+                }
+#endif
                 const std::uint32_t begin =
                     prepare_mtp && item.token_begin != 0 ? item.token_begin - 1 : item.token_begin;
                 plan.uses.push_back(VisionUseSpan{
@@ -910,11 +946,19 @@ StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& trans
                 for (std::size_t item = 0; item < used.size(); ++item) {
                     if (!used[item]) { prompt.media_payloads[item].reset(); }
                 }
-                const std::uint32_t first_item = plan.uses.front().prepared_item_index;
-                auto control                   = std::make_shared<qwen3_5::VisionControl>(
-                    qwen3_5::build_vision_control(prompt, *plan.control_plan, first_item));
-                for (VisionUseSpan& use : plan.uses) {
-                    use.control_index = use.prepared_item_index - first_item;
+                std::vector<qwen3_5::VisionExecutionSlice> slices;
+                slices.reserve(plan.uses.size());
+                for (const VisionUseSpan& use : plan.uses) {
+                    slices.push_back(qwen3_5::VisionExecutionSlice{
+                        .prepared_item_index = use.prepared_item_index,
+                        .temporal_begin = use.temporal_begin,
+                        .temporal_count = use.temporal_count,
+                    });
+                }
+                auto control = std::make_shared<qwen3_5::VisionControl>(
+                    qwen3_5::build_vision_execution_control(prompt, *plan.control_plan, slices));
+                for (std::size_t index = 0; index < plan.uses.size(); ++index) {
+                    plan.uses[index].control_index = static_cast<std::uint32_t>(index);
                 }
                 plan.control = std::move(control);
                 plan.control_plan.reset();
@@ -980,7 +1024,8 @@ StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& trans
                     *request.prefill->vision_plan, vision_handoff_peak_bytes,
                     DeviceSpan{static_cast<std::byte*>(workspace_storage.base()) +
                                    workspace_plan.vision_bridge_offset,
-                               workspace_plan.vision_bridge_bytes});
+                               workspace_plan.vision_bridge_bytes},
+                    cancellation);
                 // The first item starts encoding on CPU threads while other lanes decode.
                 request.prefill->vision->submit_next_item();
             } else if (vision_broker) {
@@ -990,14 +1035,15 @@ StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& trans
                     vision_results->acquire(),
                     DeviceSpan{static_cast<std::byte*>(workspace_storage.base()) +
                                    workspace_plan.vision_bridge_offset,
-                               workspace_plan.vision_bridge_bytes});
+                               workspace_plan.vision_bridge_bytes},
+                    cancellation);
                 request.prefill->vision->submit_next_item();
             } else {
                 request.prefill->vision = std::make_unique<execution::VisionPrefillSession>(
                     device, parameters,
                     DeviceSpan{workspace_storage.base(), workspace_storage.capacity()},
                     *workspace_plan.vision, request.prefill->prompt, *request.prefill->vision_plan,
-                    vision_handoff_peak_bytes);
+                    vision_handoff_peak_bytes, cancellation);
             }
         }
 

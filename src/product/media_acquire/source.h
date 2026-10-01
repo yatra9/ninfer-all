@@ -11,6 +11,7 @@ enum class SourceKind {
     Url,
     Data,
     Bytes,
+    LocalVideo,
 };
 
 struct Source {

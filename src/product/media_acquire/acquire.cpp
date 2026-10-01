@@ -341,6 +341,9 @@ std::vector<std::uint8_t> read_path(const Source& source, const Policy& policy) 
 std::vector<std::uint8_t> acquire_bytes(const Source& source, const Policy& policy) {
     if (policy.max_bytes == 0) { throw std::invalid_argument("media byte limit must be positive"); }
     check_control(policy);
+    if (source.kind == SourceKind::LocalVideo) {
+        throw std::invalid_argument("local video must use the typed acquisition path");
+    }
     if (source.kind == SourceKind::Bytes) {
         if (source.bytes.empty()) { throw std::invalid_argument("media source is empty"); }
         if (source.bytes.size() > policy.max_bytes) {

@@ -30,6 +30,7 @@ struct FrontendOptions {
     // Largest merged-token count one media item may occupy; larger media is downscaled at
     // preprocessing instead of being rejected. Zero leaves the artifact's pixel ceilings.
     std::uint32_t vision_max_merged_tokens = 16384;
+    std::uint32_t local_video_max_tokens   = 98'304;
     // End-of-thinking message injected when a request hits its thinking budget. Empty
     // preserves the built-in canonical control suffix; a message lacking the canonical
     // </think> close serialization gets it appended at startup.
@@ -66,7 +67,7 @@ public:
     PreparedPrompt& operator=(const PreparedPrompt&) = delete;
 
     [[nodiscard]] PromptSummary summary() const;
-    [[nodiscard]] PromptPreparationStats preparation_stats() const noexcept;
+    [[nodiscard]] PromptPreparationStats preparation_stats() const;
     [[nodiscard]] explicit operator bool() const noexcept;
     [[nodiscard]] std::unique_ptr<NgramArchive::Request> bind_ngram(NgramArchive& archive,
                                                                     const NgramSessionHints& hints);

@@ -97,6 +97,71 @@ struct MediaPreparationGate {
     std::size_t active = 0;
 };
 
+struct MediaPayloadReservationState {
+    MediaPayloadReservationState(std::shared_ptr<MemoryAccount> account_, std::size_t bytes_)
+        : account(std::move(account_)), bytes(bytes_) {}
+    ~MediaPayloadReservationState() { account->release(bytes); }
+
+    std::shared_ptr<MemoryAccount> account;
+    const std::size_t bytes;
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool occupied = false;
+};
+
+MediaPayloadReservation::MediaPayloadReservation(
+    std::shared_ptr<MediaPayloadReservationState> state) noexcept
+    : state_(std::move(state)) {}
+
+std::size_t MediaPayloadReservation::capacity_bytes() const noexcept {
+    return state_ ? state_->bytes : 0;
+}
+
+std::shared_ptr<qwen3_5::PreparedMediaPayload> MediaPayloadReservation::allocate_payload(
+    std::size_t elements, const PreparationControl& control) const {
+    if (!state_) { throw std::logic_error("media payload reservation is empty"); }
+    if (elements == 0 || elements > std::numeric_limits<std::size_t>::max() / sizeof(std::uint16_t)) {
+        throw std::invalid_argument("reserved media patch allocation has an invalid size");
+    }
+    const std::size_t bytes = elements * sizeof(std::uint16_t);
+    if (bytes > state_->bytes) {
+        throw RequestError(RequestErrorKind::MediaBudgetExceeded,
+                           "media payload exceeds its reserved live-byte capacity");
+    }
+    {
+        std::unique_lock lock(state_->mutex);
+        while (state_->occupied) {
+            check_preparation_control(control);
+            state_->changed.wait_for(lock, std::chrono::milliseconds(10));
+        }
+        state_->occupied = true;
+    }
+    qwen3_5::PreparedMediaPayload* payload = nullptr;
+    try {
+        payload = new qwen3_5::PreparedMediaPayload();
+        payload->patches = std::make_unique<std::uint16_t[]>(elements);
+        payload->patch_elements = elements;
+    } catch (...) {
+        delete payload;
+        {
+            std::lock_guard lock(state_->mutex);
+            state_->occupied = false;
+        }
+        state_->changed.notify_all();
+        throw;
+    }
+    return std::shared_ptr<qwen3_5::PreparedMediaPayload>(
+        payload, [state = state_](qwen3_5::PreparedMediaPayload* value) {
+            delete value;
+            {
+                std::lock_guard lock(state->mutex);
+                if (!state->occupied) { std::terminate(); }
+                state->occupied = false;
+            }
+            state->changed.notify_all();
+        });
+}
+
 MediaPreparationPermit::MediaPreparationPermit(std::shared_ptr<MediaPreparationGate> gate) noexcept
     : gate_(std::move(gate)) {}
 
@@ -179,6 +244,7 @@ struct MediaPreprocessCache::Impl {
               maximum_request_bytes == 0
                   ? 1
                   : std::max<std::size_t>(1, live_capacity_bytes / maximum_request_bytes))),
+          local_video_request_gate(std::make_shared<MediaPreparationGate>(1)),
           workers(std::make_shared<HostWorkerPool>(threads,
                                                    std::max<std::size_t>(64, threads * 8ULL))) {
         if (live_capacity_bytes == 0) {
@@ -238,9 +304,45 @@ struct MediaPreprocessCache::Impl {
             });
     }
 
+    [[nodiscard]] std::shared_ptr<MediaPayloadReservation>
+    reserve_payload(std::size_t elements, const PreparationControl& control) {
+        if (elements == 0 || elements > std::numeric_limits<std::size_t>::max() / sizeof(std::uint16_t)) {
+            throw std::invalid_argument("media payload reservation has an invalid size");
+        }
+        const std::size_t bytes = elements * sizeof(std::uint16_t);
+        if (bytes > state->account->limit) {
+            throw RequestError(RequestErrorKind::MediaBudgetExceeded,
+                               "media payload reservation exceeds live-byte capacity");
+        }
+        for (;;) {
+            check_preparation_control(control, "local video memory reservation");
+            if (state->account->try_reserve(bytes)) { break; }
+            bool evicted = false;
+            {
+                std::lock_guard lock(state->mutex);
+                evicted = state->evict_one_locked();
+            }
+            if (evicted) { continue; }
+            std::unique_lock lock(state->account->mutex);
+            state->account->changed.wait_for(lock, std::chrono::milliseconds(10));
+        }
+        std::shared_ptr<MediaPayloadReservationState> state_value;
+        try {
+            state_value = std::make_shared<MediaPayloadReservationState>(state->account, bytes);
+        } catch (...) {
+            state->account->release(bytes);
+            throw;
+        }
+        // Once state_value exists, its destructor is the sole owner of releasing the reservation,
+        // including when allocation of the public wrapper below fails.
+        return std::shared_ptr<MediaPayloadReservation>(
+            new MediaPayloadReservation(std::move(state_value)));
+    }
+
     const std::uint32_t threads;
     std::shared_ptr<State> state;
     std::shared_ptr<MediaPreparationGate> request_gate;
+    std::shared_ptr<MediaPreparationGate> local_video_request_gate;
     std::shared_ptr<HostWorkerPool> workers;
 };
 
@@ -258,6 +360,11 @@ MediaPreprocessCache::allocate_payload(std::size_t elements, const PreparationCo
     return impl_->allocate_payload(elements, control);
 }
 
+std::shared_ptr<MediaPayloadReservation>
+MediaPreprocessCache::reserve_payload(std::size_t elements, const PreparationControl& control) {
+    return impl_->reserve_payload(elements, control);
+}
+
 MediaPreparationPermit
 MediaPreprocessCache::acquire_request(const PreparationControl& control) const {
     for (;;) {
@@ -268,6 +375,19 @@ MediaPreprocessCache::acquire_request(const PreparationControl& control) const {
             return MediaPreparationPermit(impl_->request_gate);
         }
         impl_->request_gate->changed.wait_for(lock, std::chrono::milliseconds(10));
+    }
+}
+
+MediaPreparationPermit
+MediaPreprocessCache::acquire_local_video_request(const PreparationControl& control) const {
+    for (;;) {
+        check_preparation_control(control, "local video media preparation");
+        std::unique_lock lock(impl_->local_video_request_gate->mutex);
+        if (impl_->local_video_request_gate->active == 0) {
+            impl_->local_video_request_gate->active = 1;
+            return MediaPreparationPermit(impl_->local_video_request_gate);
+        }
+        impl_->local_video_request_gate->changed.wait_for(lock, std::chrono::milliseconds(10));
     }
 }
 

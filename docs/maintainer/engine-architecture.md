@@ -589,6 +589,7 @@ checkpoint catalog。
 | shared JSON/message-to-owning-input adapter | `src/product/prompt_input/` |
 | media URL/path/data acquisition | `src/product/media_acquire/`, CLI and serving |
 | media decode from already-owned bytes | `src/media/decode/` |
+| authorized local-video decode and bounded Vision materialization | [Local video pipeline](local-video-pipeline.md), `src/media/local_video/` (planned) |
 | HTTP Gateway | `src/serve/` |
 | 源适配、recipe 与转换方法 | `tools/convert/` |
 | Python 容器读取、编码输出与 writer | `tools/artifact/` |

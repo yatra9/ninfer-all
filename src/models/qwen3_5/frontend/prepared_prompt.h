@@ -18,6 +18,7 @@ namespace ninfer::models::qwen3_5 {
 
 namespace frontend {
 struct ToolCallOutputContract;
+struct PreparedLocalVideoInput;
 }
 
 inline constexpr std::size_t kPreparedVisionPatchFeatures = 3ULL * 2ULL * 16ULL * 16ULL;
@@ -138,6 +139,7 @@ struct PrepareStats {
     std::size_t media_singleflight_waits = 0;
     std::size_t built_patch_bytes        = 0;
     std::size_t reused_patch_bytes       = 0;
+    std::vector<LocalVideoPreparationStats> local_videos;
 };
 
 // Prompt boundary facts for hybrid prefix-cache tap placement
@@ -158,6 +160,7 @@ struct PreparedPromptData {
     std::int32_t rope_delta = 0;
     // One immutable payload per Vision item, in the same order as vision_items.
     std::vector<std::shared_ptr<const PreparedMediaPayload>> media_payloads;
+    std::vector<std::shared_ptr<frontend::PreparedLocalVideoInput>> local_videos;
     std::vector<VisionItem> vision_items;
     PromptIdentity identity;
     PreparedContextCache context_cache;

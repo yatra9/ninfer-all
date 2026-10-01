@@ -5,6 +5,7 @@
 
 #include "models/qwen3_5/frontend/chat_template.h"
 #include "models/qwen3_5/frontend/media_cache.h"
+#include "models/qwen3_5/frontend/local_video_prepare.h"
 #include "models/qwen3_5/frontend/processor.h"
 #include "models/qwen3_5/frontend/test_access.h"
 #include "models/qwen3_5/frontend/tokenizer.h"
@@ -273,6 +274,16 @@ std::vector<fi::ChatMessage> convert_messages(std::vector<ChatMessage> messages)
                 target.parts.push_back(fi::ChatPart::text_part(std::move(part.text)));
                 break;
             case MessagePartKind::Media: {
+                if (part.media.local_video) {
+                    if (part.media.kind != MediaKind::Video || !part.media.bytes.empty()) {
+                        throw std::invalid_argument(
+                            "frontend local video input has inconsistent media storage");
+                    }
+                    fi::MediaData media;
+                    media.local_video = std::move(part.media.local_video);
+                    target.parts.push_back(fi::ChatPart::video(std::move(media)));
+                    break;
+                }
                 if (part.media.bytes.empty()) {
                     throw std::invalid_argument("frontend media input contains no owning bytes");
                 }
@@ -684,6 +695,10 @@ public:
           automatic_long_anchors(options.automatic_long_anchors),
           long_anchor_min_spacing_tokens(options.long_anchor_min_spacing_tokens) {
         fi::bound_merged_tokens(processor, options.vision_max_merged_tokens);
+        processor.max_local_video_tokens = options.local_video_max_tokens;
+        processor.max_vision_execution_tokens =
+            options.vision_max_merged_tokens == 0 ? kMaximumVisionItemTokens
+                                                  : options.vision_max_merged_tokens;
         if (options.max_context == 0) {
             throw std::invalid_argument("frontend max_context must be nonzero");
         }
@@ -701,6 +716,7 @@ public:
             media_cache = std::make_shared<fi::MediaPreprocessCache>(
                 options.media_cache_bytes, options.media_live_bytes,
                 options.media_preprocess_threads, static_cast<std::size_t>(minimum_live));
+            local_video_cache = std::make_shared<fi::LocalVideoSourceCache>();
         }
         if (!tokenizer || resources.public_token_count != tokenizer->vocab_size()) {
             throw std::invalid_argument(
@@ -763,6 +779,7 @@ public:
     std::shared_ptr<const fi::Tokenizer> tokenizer;
     fi::ProcessorOptions processor;
     std::shared_ptr<fi::MediaPreprocessCache> media_cache;
+    std::shared_ptr<fi::LocalVideoSourceCache> local_video_cache;
     StopPolicy defaults;
     ModelSamplingDefaults sampling;
     std::shared_ptr<const std::vector<TokenId>> thinking_control_tokens;
@@ -803,7 +820,7 @@ PromptSummary PreparedPrompt::summary() const {
                          .has_media           = data_->has_media()};
 }
 
-PromptPreparationStats PreparedPrompt::preparation_stats() const noexcept {
+PromptPreparationStats PreparedPrompt::preparation_stats() const {
     if (data_ == nullptr) { return {}; }
     const PrepareStats& stats = data_->prepare;
     return PromptPreparationStats{
@@ -821,6 +838,7 @@ PromptPreparationStats PreparedPrompt::preparation_stats() const noexcept {
         .media_singleflight_waits      = stats.media_singleflight_waits,
         .built_patch_bytes             = stats.built_patch_bytes,
         .reused_patch_bytes            = stats.reused_patch_bytes,
+        .local_videos                  = stats.local_videos,
     };
 }
 
@@ -952,9 +970,10 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
     }
     std::vector<std::optional<std::uint32_t>> message_boundaries;
     std::vector<std::optional<std::uint32_t>> cache_boundaries;
+    bool has_local_video = false;
     if (has_media) {
         fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
-                                impl_->media_cache);
+                                impl_->media_cache, impl_->local_video_cache);
         fi::ProcessedInput processed;
         try {
             processed =
@@ -967,6 +986,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         result.positions           = std::move(processed.positions);
         result.rope_delta          = processed.rope_delta;
         result.media_payloads      = std::move(processed.media_payloads);
+        result.local_videos        = std::move(processed.local_videos);
         result.vision_items.reserve(processed.vision_items.size());
         for (fi::VisionItem& item : processed.vision_items) {
             result.vision_items.push_back(convert_vision_item(std::move(item)));
@@ -982,6 +1002,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         result.prepare.media_singleflight_waits = processed.stats.media_singleflight_waits;
         result.prepare.built_patch_bytes        = processed.stats.built_patch_bytes;
         result.prepare.reused_patch_bytes       = processed.stats.reused_patch_bytes;
+        result.prepare.local_videos             = std::move(processed.stats.local_videos);
         result.prepare.media_preprocess_seconds = processed.stats.media_preprocess_seconds;
         result.prepare.media_preprocess_work_seconds =
             processed.stats.media_preprocess_work_seconds;
@@ -989,6 +1010,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         result.identity.rewrite_checkpoint = processed.rewrite_checkpoint;
         result.identity.rewrite_execution_frontiers =
             std::move(processed.rewrite_execution_frontiers);
+        has_local_video = processed.has_local_video;
         message_boundaries = std::move(processed.message_boundaries);
         cache_boundaries   = std::move(processed.cache_boundaries);
     } else {
@@ -1065,7 +1087,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
             }
         }
     }
-    result.identity.reusable = true;
+    result.identity.reusable = !has_local_video;
     result.tap_hints         = prepare_tap_hints(cache_hints, message_boundaries, cache_boundaries,
                                                  engine_tool_marker_index, leading_boundary,
                                                  result.identity.rewrite_checkpoint);
@@ -1099,7 +1121,7 @@ std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl
     }
 
     fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
-                            impl_->media_cache);
+                            impl_->media_cache, impl_->local_video_cache);
     try {
         return checked_token_count(
             processor.count_tokens(std::move(messages), render_options(options), control));

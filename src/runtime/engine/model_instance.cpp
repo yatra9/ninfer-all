@@ -68,6 +68,9 @@ void validate_options(const EngineOptions& options) {
         throw std::invalid_argument(
             "Engine media_live_bytes must be nonzero when Vision is enabled");
     }
+    if (options.local_video_max_tokens == 0 || options.local_video_max_tokens > 98'304) {
+        throw std::invalid_argument("Engine local_video_max_tokens must be in [1,98304]");
+    }
     if (options.cuda_graph_allowance_bytes != 0 && !options.use_cuda_graph) {
         throw std::invalid_argument(
             "Engine cuda_graph_allowance_bytes requires CUDA graphs to be enabled");
@@ -369,6 +372,7 @@ ModelInstance::ModelInstance(std::unique_ptr<models::qwen3_5::Model> source,
            .media_live_bytes         = options.media_live_bytes,
            .media_preprocess_threads = options.media_preprocess_threads,
            .vision_max_merged_tokens = options.vision_max_merged_tokens,
+           .local_video_max_tokens   = options.local_video_max_tokens,
            .thinking_budget_message  = options.thinking_budget_message,
            .ngram_sources_enabled    = options.speculative.ngram_draft_tokens != 0,
            .ngram_archive_enabled    = options.speculative.ngram_archive_bytes != 0,

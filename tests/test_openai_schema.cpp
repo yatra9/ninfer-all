@@ -658,6 +658,13 @@ int test_messages_and_media() {
                           media.messages[0].content[1].kind == ContentKind::Video,
                       "image and video compatibility inputs normalize to Engine media");
 
+    body["messages"][0]["content"][1]["video_url"] =
+        "ninfer-video:///videos/a.mp4?start_frame=3";
+    const GenerationRequest local_media = parse(body).generation;
+    failures += check(local_media.messages[0].content[1].source.kind ==
+                          ninfer::product::media_acquire::SourceKind::LocalVideo,
+                      "ninfer-video was not routed before byte acquisition");
+
     body["messages"][0]["content"][0]["image_url"]["detail"] = "high";
     failures += check(api_error([&] { (void)parse(body); }).code == "image_detail_not_supported",
                       "explicit image preprocessing detail rejected");

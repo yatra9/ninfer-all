@@ -25,6 +25,22 @@ struct PreparedMedia {
 
 struct MediaCacheFlight;
 struct MediaPreparationGate;
+struct MediaPayloadReservationState;
+
+class MediaPayloadReservation {
+public:
+    MediaPayloadReservation() noexcept = default;
+
+    [[nodiscard]] std::shared_ptr<qwen3_5::PreparedMediaPayload>
+    allocate_payload(std::size_t elements, const PreparationControl& control) const;
+    [[nodiscard]] std::size_t capacity_bytes() const noexcept;
+
+private:
+    explicit MediaPayloadReservation(std::shared_ptr<MediaPayloadReservationState> state) noexcept;
+    std::shared_ptr<MediaPayloadReservationState> state_;
+
+    friend class MediaPreprocessCache;
+};
 
 class MediaPreparationPermit {
 public:
@@ -99,7 +115,14 @@ public:
     [[nodiscard]] std::shared_ptr<qwen3_5::PreparedMediaPayload>
     allocate_payload(std::size_t elements, const PreparationControl& control);
 
+    // Holds capacity in the live-byte account before a prompt retains ordinary media. The
+    // reservation can materialize one payload at a time and is reused by sequential video chunks.
+    [[nodiscard]] std::shared_ptr<MediaPayloadReservation>
+    reserve_payload(std::size_t elements, const PreparationControl& control);
+
     [[nodiscard]] MediaPreparationPermit acquire_request(const PreparationControl& control) const;
+    [[nodiscard]] MediaPreparationPermit
+    acquire_local_video_request(const PreparationControl& control) const;
 
     [[nodiscard]] PendingMedia begin_prepare(const MediaCacheKey& key,
                                              const PreparationControl& control, Builder builder);

@@ -167,8 +167,10 @@ ninfer::product::media_acquire::Source parse_video_source(const Json& part) {
         source.kind = ninfer::product::media_acquire::SourceKind::Data;
     } else if (source.value.starts_with("http://") || source.value.starts_with("https://")) {
         source.kind = ninfer::product::media_acquire::SourceKind::Url;
+    } else if (source.value.starts_with("ninfer-video://")) {
+        source.kind = ninfer::product::media_acquire::SourceKind::LocalVideo;
     } else {
-        bad_request("input_video.video_url must use HTTP(S) or a data URI", "input");
+        bad_request("input_video.video_url must use HTTP(S), a data URI, or ninfer-video", "input");
     }
     return source;
 }

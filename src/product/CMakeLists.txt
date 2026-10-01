@@ -13,6 +13,11 @@ add_library(ninfer_product_prompt_input STATIC
 ninfer_internal_includes(ninfer_product_prompt_input)
 target_link_libraries(ninfer_product_prompt_input PRIVATE ninfer_media_acquire ninfer::json)
 
+add_library(ninfer_local_video_url STATIC
+  local_video/local_video_url.cpp
+)
+ninfer_internal_includes(ninfer_local_video_url)
+
 add_library(ninfer_product_logging STATIC
   logging/logging.cpp
   logging/pretty_format.cpp

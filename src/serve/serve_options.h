@@ -56,6 +56,9 @@ struct ServeOptions {
     std::size_t media_cache_bytes          = kDefaultMediaCacheBytes;
     std::size_t media_live_bytes           = kDefaultMediaLiveBytes;
     std::uint32_t media_preprocess_threads = 0;
+    // Empty disables ninfer-video. Requests are canonicalized beneath this root before opening.
+    std::filesystem::path local_media_root;
+    std::uint32_t local_video_max_tokens = 98'304;
     std::size_t response_store_max_records = kDefaultResponseStoreRecords;
     std::size_t response_store_max_bytes   = kDefaultResponseStoreBytes;
     int device                             = 0;

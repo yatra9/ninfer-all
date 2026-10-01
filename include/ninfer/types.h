@@ -451,6 +451,9 @@ struct EngineOptions {
     // Largest merged-token count one media item may occupy; larger media is downscaled at
     // preprocessing. Also bounds the overlay window.
     std::uint32_t vision_max_merged_tokens = 16384;
+    // Aggregate merged-token budget for indexed local video. Execution remains bounded by
+    // vision_max_merged_tokens and materializes one chunk at a time.
+    std::uint32_t local_video_max_tokens   = 98'304;
     bool use_cuda_graph                    = true;
     // Explicit total CUDA Graph driver-state allowance in bytes; zero keeps the
     // computed per-profile allowance.
@@ -604,12 +607,34 @@ enum class ImageResizePolicy : std::uint8_t {
     RejectOversized,
 };
 
+enum class LocalVideoDeinterlace : std::uint8_t { Auto, On, Off };
+
+struct LocalVideoCrop {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
+// Authorized, parsed server-local input. Its path is canonical and its query has already been
+// validated; downstream preparation must not reinterpret the original URL.
+struct OwnedLocalVideo {
+    std::filesystem::path path;
+    std::int64_t start_frame = 0;
+    std::optional<std::int64_t> end_frame;
+    std::int64_t skip_frame = 0;
+    std::optional<LocalVideoCrop> crop;
+    double scale = 1.0;
+    LocalVideoDeinterlace deinterlace = LocalVideoDeinterlace::Auto;
+};
+
 struct OwnedMedia {
     MediaKind kind = MediaKind::Image;
     std::vector<std::uint8_t> bytes;
     std::string media_type;
     std::string source_name;
     ImageResizePolicy image_resize_policy = ImageResizePolicy::Downsize;
+    std::optional<OwnedLocalVideo> local_video;
 };
 
 struct ToolCall {
@@ -887,6 +912,23 @@ struct PromptSummary {
     bool has_media              = false;
 };
 
+struct LocalVideoPreparationStats {
+    int width = 0;
+    int height = 0;
+    std::uint64_t selected_frames = 0;
+    std::uint64_t chunks = 0;
+    std::uint64_t vision_tokens = 0;
+    std::int64_t first_source_index = -1;
+    std::int64_t last_source_index = -1;
+    std::int64_t first_source_pts = 0;
+    std::int64_t last_source_pts = 0;
+    double first_timestamp_seconds = 0.0;
+    double last_timestamp_seconds = 0.0;
+    std::int64_t index_builds = 0;
+    std::int64_t index_reuses = 0;
+    double index_seconds = 0.0;
+};
+
 struct PromptPreparationStats {
     double seconds                       = 0.0;
     double media_preprocess_seconds      = 0.0;
@@ -902,6 +944,7 @@ struct PromptPreparationStats {
     std::size_t media_singleflight_waits = 0;
     std::size_t built_patch_bytes        = 0;
     std::size_t reused_patch_bytes       = 0;
+    std::vector<LocalVideoPreparationStats> local_videos;
 };
 
 struct MediaCacheSummary {

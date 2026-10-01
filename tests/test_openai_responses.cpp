@@ -309,7 +309,9 @@ int test_typed_items_and_cache_markers() {
                    {"content", Json::array({Json{
                                    {"type", "input_text"},
                                    {"text", "describe"},
-                                   {"prompt_cache_breakpoint", Json{{"mode", "explicit"}}}}})}}})}};
+                                   {"prompt_cache_breakpoint", Json{{"mode", "explicit"}}}},
+                                 Json{{"type", "input_video"},
+                                      {"video_url", "ninfer-video:///videos/a.mp4"}}})}}})}};
 
     const OpenAIResponsesCreateRequest request =
         parse_openai_responses_create_request(body, limits());
@@ -335,6 +337,10 @@ int test_typed_items_and_cache_markers() {
                           request.prompt.input_turns[3].content[0].cache_boundary_after->kind ==
                               ninfer::PromptCacheMarkerKind::SharedStablePrefix,
                       "message cache marker preserved");
+    failures += check(request.prompt.input_turns[3].content.size() == 2 &&
+                          request.prompt.input_turns[3].content[1].source.kind ==
+                              ninfer::product::media_acquire::SourceKind::LocalVideo,
+                      "Responses ninfer-video was not routed before byte acquisition");
 
     OpenAIResponsesStore store(8, 1ULL << 20);
     const OpenAIResponsesResolvedPrompt resolved =

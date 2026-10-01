@@ -724,11 +724,40 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 OpenAI image and video sources may be HTTP(S) URLs or base64 data URLs.
 
+For server-local files, start Serve with `--local-media-root /videos` and mount the host video
+directory at that container path. A `ninfer-video` URL uses an absolute container path and may
+select and transform frames before Qwen preprocessing:
+
+```text
+ninfer-video:///videos/clip%20one.mp4?start_frame=120&end_frame=360&skip_frame=2&bbox=100,50,800,600&scale=0.75&deinterlace=auto
+```
+
+`start_frame` and inclusive `end_frame` select source-frame indices. `skip_frame=N` keeps one
+selected frame and skips the next N. `bbox=x,y,width,height` crops before `scale` is applied;
+`scale` must be positive. `deinterlace` accepts `auto`, `on`, or `off`. All fields are optional,
+duplicate or unknown query fields are rejected, and paths must be percent-encoded when they contain
+reserved URL characters.
+
+The repository includes a PowerShell client for manual tests. It builds the URL, sends a
+non-streaming Chat Completions request, and prints the answer, optional reasoning, finish reason,
+and token usage:
+
+```powershell
+./tools/Invoke-NInferVideo.ps1 `
+  -ApiBaseUrl http://127.0.0.1:8080/v1 `
+  -Model qwen3.8-27b `
+  -VideoPath '/videos/clip one.mp4' `
+  -Prompt 'What happens in these frames?' `
+  -StartFrame 120 -EndFrame 360 -SkipFrame 2
+```
+
 Text and media requests use one complete-prompt context contract. After chat-template rendering and
-media-token expansion, the result must fit Engine `--max-context`. The current Vision runtime also
-has a 32,768 merged-token envelope (131,072 raw patches); the effective Vision limit is therefore
-`min(--max-context, 32768)`. There is no fixed image/video item-count limit: item count is admitted
-through aggregate source-byte, decoded-pixel, raw-patch, Vision-token, and live-memory budgets.
+media-token expansion, the result must fit Engine `--max-context`. Ordinary byte-backed media also
+has a 32,768 merged-token aggregate envelope (131,072 raw patches). Indexed `ninfer-video` inputs
+instead use the separate `--local-video-max-tokens` aggregate, while every execution chunk is
+bounded by `--vision-max-merged`. There is no fixed image/video item-count limit: item count is
+admitted through aggregate source-byte, decoded-pixel, raw-patch, Vision-token, and live-memory
+budgets.
 
 Media cache misses run as independent decode → resize → BF16-pack tasks on a bounded host worker
 pool. Prepared payloads are keyed by SHA-256 of the acquired bytes plus modality, so repeated media
@@ -741,9 +770,23 @@ builds from deadlocking the memory account.
 
 An expanded prompt beyond `--max-context` returns HTTP 400 `context_length_exceeded`, including
 the prepared token count and configured context ceiling. A media preprocessing resource rejection
-returns HTTP 400 `media_budget_exceeded`. HTTP 413 `request_too_large` is reserved for a raw request
-body that exceeds `--max-request-mib` before JSON parsing; it is not used for model-context or media
-resource errors.
+returns HTTP 413 `media_budget_exceeded`. A raw request body that exceeds `--max-request-mib`
+before JSON parsing also returns 413, with the distinct code `request_too_large`.
+
+`ninfer-video` charges each BF16 chunk payload to the same `--media-live-mib` account used by
+ordinary media payloads. Before retaining ordinary payloads, preparation accounts for the largest
+local-video chunk in the request's live-memory admission. If their combined BF16 payloads
+exceed the configured capacity, preparation returns HTTP 413 before entering a memory wait. After
+ordinary payload preparation completes, it reserves that chunk capacity from the shared account;
+all local videos in the prompt reuse the reservation serially. Decoded RGB remains bounded to the
+current chunk. Media preparation admits one local-video prompt at a time so concurrent mixed
+prompts cannot each retain ordinary payloads while waiting for the others' chunk reservation;
+ordinary-only prompt preparation remains concurrent. Its initial index scan and each chunk read
+observe request cancellation,
+and the source file identity is checked before and after every chunk. A missing local file returns
+HTTP 404 `local_video_not_found`; a canonical path outside `--local-media-root` returns HTTP 403
+`local_video_forbidden`. Token, decoded-pixel, selected-frame, scan, and live-memory limits return
+HTTP 413 `media_budget_exceeded`; malformed media remains HTTP 400 `invalid_media`.
 
 ## OpenAI Responses Core
 
@@ -1236,6 +1279,8 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--vision-residency resident\|overlay\|cpu` | `overlay` keeps the Vision tower in pinned host memory and encodes each image inside a window borrowed from the evict-ranked text weight tail, so `--vision` no longer reserves device memory and `--kv-capacity auto` resolves the no-vision capacity; requires `--vision` and CUDA virtual memory management. `--vision-offload on\|off` is accepted as an alias for `overlay\|resident`. `cpu` decodes the tower to host FP32 and encodes on CPU threads with no device Vision memory (see [Vision residency](#vision-residency)); it caps `--vision-max-merged` at 256 unless given | `resident` |
 | `--vision-cpu` | `--vision` with `--vision-residency cpu` | off |
 | `--vision-max-merged N` | merged-token budget of one media item, `[64, 16384]`; larger images and video frame pairs are downscaled at preprocessing instead of being rejected, and the overlay window is sized for it | 16384 |
+| `--local-media-root PATH` | enable `ninfer-video` URLs for canonical regular files beneath this absolute container path | disabled |
+| `--local-video-max-tokens N` | aggregate merged-token budget for one request's indexed local videos, `[1, 98304]`; each execution chunk remains bounded by `--vision-max-merged` | 98304 |
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
 | `--cuda-graph-allowance-mib N` | total CUDA Graph driver-state allowance in MiB, subtracted from the KV sizing budget | computed |
 | `--no-prefix-reuse` | disable compatible-prefix caching | prefix reuse on |
@@ -1375,11 +1420,14 @@ is also rejected if it resolves to the model artifact.
 Add `--request-log-jsonl profiles/bench/run/server.requests.jsonl` to the startup command to write
 the log at that path.
 
-Every line is one `ninfer_serve_request_log` schema-v22 JSON object. All events carry
+Every line is one `ninfer_serve_request_log` schema-v28 JSON object. All events carry
 `timestamp_unix_ms` and a process-unique `server_instance_id`; request IDs are monotonic only within
 that server instance. Successful request-start records include request-scoped acquisition,
 media-preprocessing wall/work, tokenizer, cache hit/miss/single-flight, and payload-size fields;
-they do not infer request behavior from process-global counter deltas.
+they do not infer request behavior from process-global counter deltas. Local-video preparation
+also records one `local_videos` entry per item with resolved dimensions, selected-frame and chunk
+counts, Vision tokens, first/last source index, PTS and timestamp, and index build/reuse timing.
+It never records the authorized path or encoded/video contents.
 
 | Event | Contents |
 |---|---|

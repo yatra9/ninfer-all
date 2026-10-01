@@ -4,7 +4,15 @@ target_sources(ninfer_model_runtime PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/frontend/chat_template.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/frontend/prompt_layout.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/frontend/digest.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/frontend/local_video_plan.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/frontend/processor.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/frontend/media_cache.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/frontend/tool_call_parser.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/frontend/vision_patchify.cpp"
 )
+
+if(NOT WIN32)
+  target_sources(ninfer_model_runtime PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/frontend/local_video_prepare.cpp")
+  target_link_libraries(ninfer_model_runtime PRIVATE ninfer_local_video)
+endif()

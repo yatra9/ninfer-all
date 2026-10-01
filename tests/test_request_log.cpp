@@ -291,6 +291,22 @@ int main() {
     prepared.preparation.media_items                   = 1;
     prepared.preparation.media_cache_misses            = 1;
     prepared.preparation.built_patch_bytes             = 49152;
+    prepared.preparation.local_videos.push_back(ninfer::LocalVideoPreparationStats{
+        .width = 1024,
+        .height = 768,
+        .selected_frames = 256,
+        .chunks = 7,
+        .vision_tokens = 98'304,
+        .first_source_index = 4,
+        .last_source_index = 514,
+        .first_source_pts = 8'000,
+        .last_source_pts = 1'028'000,
+        .first_timestamp_seconds = 0.5,
+        .last_timestamp_seconds = 64.25,
+        .index_builds = 1,
+        .index_reuses = 2,
+        .index_seconds = 0.75,
+    });
 
     const RequestLogMetadata metadata{
         .model                             = "qwen3.6-27b",
@@ -335,7 +351,17 @@ int main() {
                           started.at("preparation_seconds").at("acquisition") == 0.004 &&
                           started.at("preparation_seconds").at("media_preprocess_work") == 0.31 &&
                           started.at("preparation_seconds").at("tokenize") == 0.02 &&
-                          started.at("preparation_seconds").at("cache_misses") == 1,
+                          started.at("preparation_seconds").at("cache_misses") == 1 &&
+                          started.at("preparation_seconds").at("local_videos").at(0).at("width") ==
+                              1024 &&
+                          started.at("preparation_seconds")
+                                  .at("local_videos")
+                                  .at(0)
+                                  .at("selected_frames") == 256 &&
+                          started.at("preparation_seconds")
+                                  .at("local_videos")
+                                  .at(0)
+                                  .at("index_reuses") == 2,
                       "request-scoped media preparation diagnostics missing");
 
     ApiError preparation_error;

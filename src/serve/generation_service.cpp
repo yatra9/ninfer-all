@@ -1,6 +1,7 @@
 #include "serve/generation_service.h"
 
 #include "product/media_acquire/acquire.h"
+#include "product/local_video/local_video_url.h"
 #include "serve/console_log.h"
 #include "serve/translate.h"
 
@@ -57,7 +58,7 @@ ApiError request_error_to_api_error(const ninfer::RequestError& exception) {
         error.code   = "thinking_budget_capacity_insufficient";
         break;
     case ninfer::RequestErrorKind::MediaBudgetExceeded:
-        error.status = 400;
+        error.status = 413;
         error.code   = "media_budget_exceeded";
         break;
     case ninfer::RequestErrorKind::InvalidMedia:
@@ -104,7 +105,7 @@ using Clock = std::chrono::steady_clock;
     error.message = exception.what();
     switch (exception.kind()) {
     case ninfer::product::media_acquire::ErrorKind::BudgetExceeded:
-        error.status = 400;
+        error.status = 413;
         error.code   = "media_budget_exceeded";
         break;
     case ninfer::product::media_acquire::ErrorKind::RemoteUnavailable:
@@ -138,6 +139,30 @@ using Clock = std::chrono::steady_clock;
     throw ApiException(std::move(error));
 }
 
+[[noreturn]] void throw_local_path_error(
+    const ninfer::product::local_video::PathError& exception) {
+    ApiError error;
+    error.param   = "messages";
+    error.message = exception.what();
+    switch (exception.kind()) {
+    case ninfer::product::local_video::PathErrorKind::NotFound:
+        error.status = 404;
+        error.code   = "local_video_not_found";
+        break;
+    case ninfer::product::local_video::PathErrorKind::OutsideRoot:
+        error.status = 403;
+        error.code   = "local_video_forbidden";
+        break;
+    case ninfer::product::local_video::PathErrorKind::Disabled:
+    case ninfer::product::local_video::PathErrorKind::InvalidRoot:
+    case ninfer::product::local_video::PathErrorKind::NotRegularFile:
+        error.status = 400;
+        error.code   = "invalid_local_video";
+        break;
+    }
+    throw ApiException(std::move(error));
+}
+
 [[noreturn]] void throw_preparation_cancelled() {
     ApiError error;
     error.status  = 499;
@@ -149,7 +174,45 @@ using Clock = std::chrono::steady_clock;
 
 ninfer::OwnedMedia acquire_media(const ContentPart& part, Clock::time_point deadline,
                                  const std::function<bool()>& is_cancelled,
-                                 std::size_t& remaining_bytes) {
+                                 std::size_t& remaining_bytes,
+                                 const std::filesystem::path& local_media_root) {
+    if (part.source.kind == ninfer::product::media_acquire::SourceKind::LocalVideo) {
+        try {
+            auto spec = ninfer::product::local_video::parse_local_video_url(part.source.value);
+            spec.path = ninfer::product::local_video::authorize_local_path(spec.path,
+                                                                           local_media_root);
+            ninfer::OwnedMedia media;
+            media.kind        = ninfer::MediaKind::Video;
+            media.source_name = spec.path.string();
+            ninfer::OwnedLocalVideo local;
+            local.path        = std::move(spec.path);
+            local.start_frame = spec.start_frame;
+            local.end_frame   = spec.end_frame;
+            local.skip_frame  = spec.skip_frame;
+            local.scale       = spec.scale;
+            if (spec.bbox) {
+                local.crop = ninfer::LocalVideoCrop{spec.bbox->x, spec.bbox->y, spec.bbox->width,
+                                                     spec.bbox->height};
+            }
+            switch (spec.deinterlace) {
+            case ninfer::product::local_video::DeinterlaceMode::Auto:
+                local.deinterlace = ninfer::LocalVideoDeinterlace::Auto;
+                break;
+            case ninfer::product::local_video::DeinterlaceMode::On:
+                local.deinterlace = ninfer::LocalVideoDeinterlace::On;
+                break;
+            case ninfer::product::local_video::DeinterlaceMode::Off:
+                local.deinterlace = ninfer::LocalVideoDeinterlace::Off;
+                break;
+            }
+            media.local_video = std::move(local);
+            return media;
+        } catch (const ninfer::product::local_video::PathError& exception) {
+            throw_local_path_error(exception);
+        } catch (const std::invalid_argument& exception) {
+            throw_invalid_input(exception, "invalid_local_video");
+        }
+    }
     if (remaining_bytes == 0) {
         throw_media_error(ninfer::product::media_acquire::Error(
             ninfer::product::media_acquire::ErrorKind::BudgetExceeded,
@@ -184,6 +247,8 @@ ninfer::OwnedMedia acquire_media(const ContentPart& part, Clock::time_point dead
     case ninfer::product::media_acquire::SourceKind::Bytes:
         media.source_name = "inline-bytes";
         break;
+    case ninfer::product::media_acquire::SourceKind::LocalVideo:
+        throw std::logic_error("local video reached byte acquisition");
     }
     media.bytes               = std::move(source_bytes);
     media.image_resize_policy = part.image_resize_policy;
@@ -264,6 +329,7 @@ ninfer::EngineOptions make_engine_options(const ServeOptions& options) {
     engine_options.enable_vision            = options.enable_vision;
     engine_options.vision_residency         = options.vision_residency;
     engine_options.vision_max_merged_tokens = options.vision_max_merged_tokens;
+    engine_options.local_video_max_tokens   = options.local_video_max_tokens;
     engine_options.use_cuda_graph           = options.use_cuda_graph;
     engine_options.lm_head_q4               = options.lm_head_q4;
     engine_options.lm_head_q6               = options.lm_head_q6;
@@ -420,7 +486,7 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& incomin
         ninfer::PromptInput input =
             to_prompt_input(request, semantics, [&](const ContentPart& part) {
                 return acquire_media(part, prepared.lifetime->deadline, is_cancelled,
-                                     remaining_media_bytes);
+                                     remaining_media_bytes, options_.local_media_root);
             });
         std::vector<PromptCacheMarker> protocol_markers = std::move(input.context_cache.markers);
         const bool protocol_allows_engine_automatic =
@@ -487,7 +553,8 @@ int GenerationService::count_prompt_tokens(const GenerationRequest& request,
             std::min(options_.max_request_bytes, ninfer::kMaximumPromptMediaBytes);
         ninfer::PromptInput input =
             to_prompt_input(request, semantics, [&](const ContentPart& part) {
-                return acquire_media(part, deadline, is_cancelled, remaining_media_bytes);
+                return acquire_media(part, deadline, is_cancelled, remaining_media_bytes,
+                                     options_.local_media_root);
             });
         check_preparation_control(deadline, is_cancelled);
         const PreparationControl control{

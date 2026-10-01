@@ -30,6 +30,30 @@ ServeOptions parse(std::vector<std::string> arguments) {
 
 int main() {
     int failures = 0;
+    const auto local_video =
+        parse({"ninfer-serve", "model.ninfer", "--local-media-root", "/videos"});
+    failures += check(local_video.local_media_root == "/videos",
+                      "--local-media-root was not preserved");
+    failures += check(parse({"ninfer-serve", "model.ninfer"}).local_media_root.empty(),
+                      "ninfer-video was enabled by default");
+    failures += check(parse({"ninfer-serve", "model.ninfer"}).local_video_max_tokens == 98'304,
+                      "local video token budget default changed");
+    failures += check(parse({"ninfer-serve", "model.ninfer", "--local-video-max-tokens", "4096"})
+                              .local_video_max_tokens == 4096,
+                      "local video token budget was not preserved");
+    bool relative_root_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--local-media-root", "videos"});
+    } catch (const std::invalid_argument&) { relative_root_rejected = true; }
+    failures += check(relative_root_rejected, "relative --local-media-root was accepted");
+    for (const char* invalid : {"0", "98305"}) {
+        bool rejected = false;
+        try {
+            (void)parse(
+                {"ninfer-serve", "model.ninfer", "--local-video-max-tokens", invalid});
+        } catch (const std::invalid_argument&) { rejected = true; }
+        failures += check(rejected, "invalid --local-video-max-tokens was accepted");
+    }
     const auto archive = parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens",
                                 "5", "--ngram-draft-tokens", "63", "--ngram-archive-mib", "512",
                                 "--ngram-session-mib", "128", "--ngram-native-sessions"});

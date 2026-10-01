@@ -293,20 +293,22 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
                 }
             }
             VisionPrefillPlan& vision      = *request_plan.vision;
-            const std::uint32_t first_item = vision.uses.front().prepared_item_index;
             if (!vision.control_plan) {
                 throw std::logic_error("Vision suffix plan has no prepared metadata");
             }
+            std::vector<qwen3_5::VisionExecutionSlice> slices;
+            slices.reserve(vision.uses.size());
+            for (const VisionUseSpan& use : vision.uses) {
+                slices.push_back(qwen3_5::VisionExecutionSlice{
+                    .prepared_item_index = use.prepared_item_index,
+                    .temporal_begin = use.temporal_begin,
+                    .temporal_count = use.temporal_count,
+                });
+            }
             auto control = std::make_shared<qwen3_5::VisionControl>(
-                qwen3_5::build_vision_control(prompt, *vision.control_plan, first_item));
-            for (VisionUseSpan& use : vision.uses) {
-                if (use.prepared_item_index < first_item) {
-                    throw std::logic_error("Vision suffix item order changed during admission");
-                }
-                use.control_index = use.prepared_item_index - first_item;
-                if (use.control_index >= control->items.size()) {
-                    throw std::logic_error("Vision suffix control does not cover a planned item");
-                }
+                qwen3_5::build_vision_execution_control(prompt, *vision.control_plan, slices));
+            for (std::size_t index = 0; index < vision.uses.size(); ++index) {
+                vision.uses[index].control_index = static_cast<std::uint32_t>(index);
             }
             vision.control = std::move(control);
             vision.control_plan.reset();
@@ -361,7 +363,8 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
                     *request.prefill->vision_plan, vision_handoff_peak_bytes,
                     DeviceSpan{static_cast<std::byte*>(workspace_storage.base()) +
                                    workspace_plan.vision_bridge_offset,
-                               workspace_plan.vision_bridge_bytes});
+                               workspace_plan.vision_bridge_bytes},
+                    cancellation);
                 // The first item starts encoding on CPU threads while other lanes decode.
                 request.prefill->vision->submit_next_item();
             } else if (vision_broker) {
@@ -371,7 +374,8 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
                     vision_results->acquire(),
                     DeviceSpan{static_cast<std::byte*>(workspace_storage.base()) +
                                    workspace_plan.vision_bridge_offset,
-                               workspace_plan.vision_bridge_bytes});
+                               workspace_plan.vision_bridge_bytes},
+                    cancellation);
                 // Start the first item now so its window overlaps the decode rounds that run
                 // before this lane gets a prefill unit.
                 request.prefill->vision->submit_next_item();
@@ -380,7 +384,7 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
                     device, parameters,
                     DeviceSpan{workspace_storage.base(), workspace_storage.capacity()},
                     *workspace_plan.vision, request.prefill->prompt, *request.prefill->vision_plan,
-                    vision_handoff_peak_bytes);
+                    vision_handoff_peak_bytes, cancellation);
             }
         }
         request.prefill->elapsed_seconds =

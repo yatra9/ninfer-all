@@ -11,6 +11,7 @@
 #include "models/qwen3_5/program/vision_control.h"
 #include "models/qwen3_5/program/planning/startup.h"
 #include "models/qwen3_5/program/vision_prefill.h"
+#include "runtime/contract/request.h"
 
 #include <array>
 #include <cstddef>
@@ -19,6 +20,10 @@
 #include <optional>
 #include <span>
 #include <vector>
+
+namespace ninfer::models::qwen3_5::frontend {
+class LocalVideoPayloadReader;
+}
 
 namespace ninfer::models::qwen3_5::execution {
 
@@ -82,20 +87,23 @@ public:
     VisionPrefillSession(DeviceContext& device, const execution::Parameters& parameters,
                          DeviceSpan workspace, const VisionWorkspacePlan& workspace_plan,
                          qwen3_5::PreparedPromptData& prompt, const VisionPrefillPlan& plan,
-                         std::size_t& handoff_peak_bytes);
+                         std::size_t& handoff_peak_bytes,
+                         runtime::CancellationFlagView request_control);
     // Overlay residency: items are encoded inside windows brokered by the Program. The bridge
     // staging holds the one visual column an MTP bridge composes outside a prefill chunk.
     VisionPrefillSession(DeviceContext& device, const execution::Parameters& parameters,
                          const VisionWorkspacePlan& window_plan,
                          qwen3_5::PreparedPromptData& prompt, const VisionPrefillPlan& plan,
                          std::size_t& handoff_peak_bytes, VisionResidencyBroker& broker,
-                         PinnedResultPool::Handle result, DeviceSpan bridge_staging);
+                         PinnedResultPool::Handle result, DeviceSpan bridge_staging,
+                         runtime::CancellationFlagView request_control);
     // CPU residency: items are encoded on CPU threads, the next one beside other lanes' decode, and
     // staged from host memory like overlay results.
     VisionPrefillSession(DeviceContext& device, const execution::Parameters& parameters,
                          const VisionWorkspacePlan& cpu_plan, qwen3_5::PreparedPromptData& prompt,
                          const VisionPrefillPlan& plan, std::size_t& handoff_peak_bytes,
-                         DeviceSpan bridge_staging);
+                         DeviceSpan bridge_staging,
+                         runtime::CancellationFlagView request_control);
     ~VisionPrefillSession();
 
     [[nodiscard]] VisionChunk prepare_chunk(std::uint32_t begin, std::uint32_t nominal_length);
@@ -119,6 +127,8 @@ public:
 private:
     void validate_plan() const;
     void submit_cpu_item(std::size_t use_index);
+    [[nodiscard]] std::shared_ptr<const PreparedMediaPayload>
+    payload_for(const VisionUseSpan& use);
 
     DeviceContext& device_;
     const execution::Parameters& parameters_;
@@ -127,6 +137,7 @@ private:
     qwen3_5::PreparedPromptData& prompt_;
     const VisionPrefillPlan& plan_;
     std::size_t& handoff_peak_bytes_;
+    runtime::CancellationFlagView request_control_;
     std::optional<VisionContext> context_;
     std::unique_ptr<VisionOverlaySession> overlay_;
     std::unique_ptr<CpuVisionSession> cpu_;
@@ -140,6 +151,10 @@ private:
     std::uint32_t active_use_end_     = 0;
     std::size_t active_handoff_bytes_ = 0;
     std::vector<std::uint32_t> encoded_payloads_pending_release_;
+#ifndef _WIN32
+    std::vector<std::unique_ptr<qwen3_5::frontend::LocalVideoPayloadReader>> local_video_readers_;
+#endif
+    std::shared_ptr<const PreparedMediaPayload> active_payload_;
     std::vector<CudaEventTimer> timers_;
 };
 
