@@ -798,6 +798,13 @@ public:
     // block-table copy and recurrent state -- allocated in that device's own memory.
     std::vector<DeviceArena> persistent_by_rank;
     DeviceArena workspace_storage;
+    // Ordinary RAM, allocated only for suspension. Capacity bytes, including unused storage.
+    std::unique_ptr<std::byte[]> residency_snapshot;
+    bool residency_storage_intact = true;
+    [[nodiscard]] bool residency_idle() const;
+    void snapshot_persistent();
+    void detach_storage();
+    void restore_storage();
     // Pipeline stages only: scratch for the ranks past the primary device, each allocated in its
     // own card's memory. `work` borrows a slice of each and switches between them as the layer
     // loop walks stages, so every existing workspace call site keeps using one arena object.

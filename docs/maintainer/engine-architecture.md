@@ -223,6 +223,12 @@ Frontend 和 Parameters，最后释放 Model backing。默认情况下 Reader �
 Host/Pinned payload 不重复保留。恢复复用初次加载的范围合并、staging、transcode 和上传实现，
 写入原有 Device destination，既有 parent、binding 与 Parameters 不重建。
 
+启用 suspend 的单 GPU Program 为 persistent 与 workspace 保留固定 VA。空闲时，persistent 的
+完整 capacity 原始字节写入惰性分配的普通 Host RAM；恢复保持 CPU cache/lease 元数据和所有 Graph，
+将完整快照写回原 VA。workspace 使用新的 physical backing，不保存旧内容；scratch 与 Vision bridge
+在使用前写入。检查覆盖 request、context transaction、Vision window、pool loan，以及 compute、transfer、
+Vision 和 hybrid cache 独立 restore stream。detach 开始后，关闭时不执行读取 Device 的 reset 或 disk spill。
+
 权重、State/KV backing、block-table matrices、workspace 与 CUDA Graph resources 在 Engine 开始接受请求前
 建立。运行期改变 ownership、mapping、frontier 与 replica placement，但不重建这些大块 Device allocations。
 

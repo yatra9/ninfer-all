@@ -1142,6 +1142,17 @@ public:
     [[nodiscard]] MemorySummary memory_summary() const noexcept;
     void reset_memory_peaks() noexcept;
 
+    // Called with exclusive Engine execution ownership. Views and graphs remain bound.
+    [[nodiscard]] bool residency_idle() const;
+    [[nodiscard]] std::size_t persistent_capacity() const noexcept;
+    [[nodiscard]] std::size_t persistent_device_bytes() const noexcept;
+    [[nodiscard]] std::size_t workspace_device_bytes() const noexcept;
+    [[nodiscard]] std::size_t snapshot_bytes() const noexcept;
+    void snapshot_persistent();
+    void detach_storage();
+    void restore_storage();
+    void release_snapshot() noexcept;
+
 private:
     explicit Program(std::unique_ptr<detail::ProgramImpl> impl) noexcept;
     std::unique_ptr<detail::ProgramImpl> impl_;

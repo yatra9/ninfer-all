@@ -158,6 +158,8 @@ public:
 
     // Waits for every Host write and landing restore and publishes them.
     void drain();
+    // Residency checks must include this independently owned restore stream.
+    [[nodiscard]] cudaStream_t residency_restore_stream() const noexcept { return restore_stream_; }
 
     // ---- Host restores (one admission staged at a time) --------------------------------------
     // Opens a restore batch ordered after the producer's queued work (Device destinations may have

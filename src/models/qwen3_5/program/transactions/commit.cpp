@@ -880,6 +880,9 @@ ReleaseResult ProgramImpl::release_shared_prefix(SharedPrefixHandle&& handle) no
 
 std::optional<qwen3_5::PhysicalUsageSnapshot>
 ProgramImpl::fail_all_cleanup(ProgramCleanup cleanup) noexcept {
+    // Suspension was admitted only with no requests or transactions. Keep CPU owners until
+    // destruction rather than invoking GPU reset/spill operations on absent or partial backing.
+    if (!residency_storage_intact) { return std::nullopt; }
     pending_transaction_.reset();
     if (auto* transaction = std::get_if<ActiveCaptureTransaction>(&context_transaction_)) {
         if (transaction->transfer_submitted) { synchronize_transfer_streams(); }

@@ -156,9 +156,9 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
       kv_payload_bytes(plan.persistent.kv_payload_bytes),
       graph_allowance_bytes(plan.graph_allowance_bytes), workspace_plan(plan.workspace),
       kv_arena(make_kv_arena(device_in, parameters_in, plan)),
-      persistent(kv_arena ? DeviceArena(kv_arena->arena()) : DeviceArena(plan.persistent.bytes)),
+      persistent(kv_arena ? DeviceArena(kv_arena->arena()) : DeviceArena(plan.persistent.bytes, parameters_in.model.options().enable_model_suspend)),
       persistent_by_rank(make_rank_persistent(device_in, plan.persistent.extra_rank_bytes)),
-      workspace_storage(plan.workspace.capacity),
+      workspace_storage(plan.workspace.capacity, parameters_in.model.options().enable_model_suspend),
       workspace_storage_by_rank(
           make_rank_workspaces(device_in, parameters_in.text, plan.workspace.general_capacity)),
       work(DeviceSpan{workspace_storage.base(), plan.workspace.general_capacity}),
@@ -552,7 +552,7 @@ void ProgramImpl::synchronize_transfer_streams() const {
 }
 
 ProgramImpl::~ProgramImpl() noexcept {
-    flush_disk_tier();
+    if (residency_storage_intact) { flush_disk_tier(); }
     for (std::size_t rank = 0; rank < transfer_streams.size(); ++rank) {
         (void)cudaStreamSynchronize(transfer_streams[rank]);
         (void)cudaStreamSynchronize(compute_streams[rank]);

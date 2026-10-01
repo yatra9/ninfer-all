@@ -179,14 +179,16 @@ P2検証（2026-10-02）: WSLC CUDA 13.1 / GCC 13 / RTX 3090でartifact material
 
 ### P3: Programのpersistent snapshotとworkspace復帰
 
-- [ ] persistentのlayout/constructor contractを保ったまま、通常arenaまたはKV poolへP1を接続する。
-- [ ] `persistent.capacity()` 分の通常Host RAMをlazy allocateし、whole-arena raw D2H/H2Dを実装する。
+- [x] persistentのlayout/constructor contractを保ったまま、通常arenaまたはKV poolへP1を接続する。
+- [x] `persistent.capacity()` 分の通常Host RAMをlazy allocateし、whole-arena raw D2H/H2Dを実装する。
   used bytes、live KV、lendable prefixだけのコピーに縮めない。
-- [ ] workspaceをfixed-VA化し、fresh backingで必要な初期化のみ実行する。
-- [ ] snapshotはSUSPENDED中と復旧判断に必要な失敗時に保持し、resume成功後に解放する。
+- [x] workspaceをfixed-VA化し、fresh backingで必要な初期化のみ実行する。
+- [x] snapshotはSUSPENDED中と復旧判断に必要な失敗時に保持し、resume成功後に解放する。
 - [ ] CPU側sequence/cache/lease metadataを維持し、既存continuationからの生成とoverlay再実行を検証する。
 
 出口条件: persistent全bytesの復元とfresh workspaceでの推論が成立し、graph再構築が不要なこと。
+
+P3実装（2026-10-02）: opt-inのpersistent/workspaceをVMM化。通常RAMをlazy確保しcapacity全体をraw D2H/H2Dする。CPU metadataとview/graphを再構築しない。request/context transaction/seal/Vision/pool loanと全stream（hybrid独立restoreを含む）の非blocking idle検査を追加。partial detach以降のcleanupとdestructor disk spillを抑止。WSLC GCC 13でProgramImpl/residency/cleanup/ModelInstanceの構文検査成功。artifact回帰CTest成功。専用コンテナ ninfer-suspend-dev の /tmp/ninfer-suspend-build で製品runtime全buildを進行中。Programの実モデルsnapshot・continuation・fresh-workspace検証はEngine接続後に実施するためP3の出口条件はまだ未確認。次はP4のEngine state/admission/try-lock、typed public APIと状態遷移テスト。
 
 ### P4: Engine state machineとpublic契約
 
