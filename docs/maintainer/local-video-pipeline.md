@@ -7,10 +7,10 @@ are specified in [`SPEC_VIDEO.md`](../../SPEC_VIDEO.md); this file records how t
 current frontend, Program, and Vision execution ownership.
 
 The canonical CPU decoder/filter implementation is `src/media/local_video/video_pipeline.*` and
-the Linux/WSLC build exposes it as the `ninfer_local_video` static-library target. The workspace
-`video-lab` CLI links those same sources from the workspace-root Docker context, so its regression
-suite exercises the product implementation rather than a copy. Native Windows support remains
-outside the initial WSLC scope.
+the Linux/WSLC build exposes it as the `ninfer_local_video` static-library target. The
+[`video-lab`](../../tools/video-lab/README.md) CLI links those same sources from the repository-root
+Docker context, so its regression suite exercises the product implementation rather than a copy.
+Native Windows support remains outside the initial WSLC scope.
 
 ## Existing Vision semantics
 

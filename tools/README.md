@@ -24,6 +24,7 @@ Python tools are independent of CMake; there is no `NINFER_BUILD_TOOLS` option.
 | Check long-context recall, cold prefill against a cached prefix | [`longctx_recall_probe.py`](longctx_recall_probe.py) |
 | Exercise a resident HTTP server | [`smoke/serve_contract.py`](smoke/serve_contract.py) |
 | Ask a resident server about a local video | [`Invoke-NInferVideo.ps1`](Invoke-NInferVideo.ps1) |
+| Inspect, extract, and verify local-video decoding | [`video-lab/`](video-lab/README.md) |
 | Exercise thinking preservation through a managed server | [`smoke/serve_thinking_preservation.py`](smoke/serve_thinking_preservation.py) |
 | Measure the physical HBM read/copy ceiling | [`hbm_bandwidth_probe.cu`](hbm_bandwidth_probe.cu); [build command](#standalone-hbm-probe) |
 

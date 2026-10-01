@@ -254,6 +254,14 @@
 - 動画機能の仕様・計画をリポジトリで履歴管理できるよう、workspace直下の`SPEC.md`と`PLAN.md`を
   repository rootの`SPEC_VIDEO.md`と`PLAN_VIDEO.md`へ移動した。`AGENTS.md`のcommit checkpointと
   maintainer文書を含む旧path・旧名参照も新しい場所へ更新した。
+- standalone検証アプリ全体をworkspace直下の`video-lab`からrepository内の`tools/video-lab`へ移した。
+  CMakeはrepository内のcanonical `src/media/local_video`を直接buildし、Dockerfileはrepository rootを
+  contextとする。旧`NInfer/video-lab` directoryは移動により削除済み。tools index、README、maintainer
+  文書も新pathとbuild commandへ更新し、SPECの機能契約変更はない。
+- 移動後検証完了: `wslc build -f .\tools\video-lab\Dockerfile -t video-lab:dev .`が成功し、生成した
+  CFR/VFR/B-frame/interlace fixtureを含む`video_pipeline_behavior`は1/1成功（3.63秒）。image SHAは
+  `e6638a7f468708dbe6c52f2c19b36597e6565d70b067748c056bed7ee3bbaa68`。同imageの`--help`起動も成功。
+  次の作業は実際の利用者動画による対話的な内容確認のみ。
 
 この節を各commitの直前に更新する。完了項目、実行した検証、既知の制約、次の一手を、
 会話履歴なしで作業を再開できる粒度で残す。
