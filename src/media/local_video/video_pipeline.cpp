@@ -5,12 +5,14 @@
 #include <cmath>
 #include <deque>
 #include <condition_variable>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -60,9 +62,22 @@ struct Input {
     int stream = -1;
     bool drained = false;
     const Options* options;
+    std::exception_ptr interrupted;
     static int interrupt(void* p) {
         auto* self = static_cast<Input*>(p);
-        try { if(self->options) checkpoint(*self->options); return 0; } catch (...) { return 1; }
+        try {
+            if(self->options) checkpoint(*self->options);
+            return 0;
+        } catch (...) {
+            self->interrupted = std::current_exception();
+            return 1;
+        }
+    }
+    void check_io(int rc, const char* stage) {
+        if (rc < 0 && interrupted) {
+            std::rethrow_exception(std::exchange(interrupted, {}));
+        }
+        check(rc, stage);
     }
     explicit Input(const std::filesystem::path& path, const Options* o = nullptr): options(o) {
         require(std::filesystem::is_regular_file(path), "input must be a local regular file");
@@ -72,8 +87,8 @@ struct Input {
             AVDictionary* opts = nullptr;
             av_dict_set(&opts, "protocol_whitelist", "file", 0);
             int rc = avformat_open_input(&fmt, path.c_str(), nullptr, &opts);
-            av_dict_free(&opts); check(rc, "open video");
-            check(avformat_find_stream_info(fmt, nullptr), "probe video");
+            av_dict_free(&opts); check_io(rc, "open video");
+            check_io(avformat_find_stream_info(fmt, nullptr), "probe video");
             stream = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
             check(stream, "find video stream");
             const AVCodec* codec = avcodec_find_decoder(fmt->streams[stream]->codecpar->codec_id);
@@ -82,7 +97,13 @@ struct Input {
             check(avcodec_parameters_to_context(dec, fmt->streams[stream]->codecpar), "configure decoder");
             dec->thread_count = 2;
             dec->err_recognition = AV_EF_CAREFUL | AV_EF_EXPLODE;
-            if (o) dec->max_pixels = o->max_pixels;
+            if (o) {
+                require(dec->width > 0 && dec->height > 0,
+                        "video decoder reports invalid source dimensions");
+                require_resource(std::int64_t(dec->width) * dec->height <= o->max_pixels,
+                                 "source dimensions exceed max_pixels");
+                dec->max_pixels = o->max_pixels;
+            }
             check(avcodec_open2(dec, codec, nullptr), "open decoder");
             packet = av_packet_alloc(); if (!packet) throw std::bad_alloc();
         } catch (...) { close(); throw; }
@@ -106,13 +127,17 @@ struct Input {
                     check(avcodec_send_packet(dec, nullptr), "drain decoder");
                     drained = true; break;
                 }
-                check(rc, "read packet");
+                check_io(rc, "read packet");
             } while (packet->stream_index != stream);
             if (!drained) check(avcodec_send_packet(dec, packet), "send packet");
         }
     }
     bool seek(std::int64_t pts) {
-        if (avformat_seek_file(fmt, stream, INT64_MIN, pts, pts, 0) < 0) return false;
+        const int rc = avformat_seek_file(fmt, stream, INT64_MIN, pts, pts, 0);
+        if (rc < 0) {
+            if (interrupted) { std::rethrow_exception(std::exchange(interrupted, {})); }
+            return false;
+        }
         avcodec_flush_buffers(dec); av_packet_unref(packet); drained = false; return true;
     }
 };
@@ -379,6 +404,8 @@ struct VideoSource::Impl {
     std::uintmax_t size;
     std::filesystem::file_time_type modified;
     mutable std::mutex mutex;
+    std::condition_variable index_changed;
+    bool index_building = false;
     std::shared_ptr<const std::vector<Timing>> index;
     Stats index_stats;
     SourceStats diagnostics;
@@ -395,35 +422,60 @@ struct VideoSource::Impl {
             "input changed after VideoSource was opened");
     }
     void ensure_index(const Options& o) {
-        std::lock_guard lock(mutex);
-        require_unchanged();
-        if(index) { ++diagnostics.index_reuses; return; }
-        auto started=Clock::now();
-        auto candidate=std::make_shared<std::vector<Timing>>();
-        Input scan(path,&o); auto f=frame();
-        std::optional<std::int64_t> delta; bool variable=false;
-        while(scan.next(f.get())) {
-            geometry(f.get(),o);
-            require_resource(candidate->size()<std::uint64_t(o.max_scan_frames),"index exceeds max_scan_frames");
-            auto stamp=pts(f.get());
-            if(!candidate->empty()) {
-                require(stamp>candidate->back().pts,"non-increasing PTS cannot be indexed unambiguously");
-                auto d=stamp-candidate->back().pts;
-                if(delta && d!=*delta) variable=true;
-                delta=d;
+        for (;;) {
+            checkpoint(o);
+            require_unchanged();
+            {
+                std::unique_lock lock(mutex);
+                if(index) { ++diagnostics.index_reuses; return; }
+                if(index_building) {
+                    index_changed.wait_for(lock, std::chrono::milliseconds(10));
+                    continue;
+                }
+                index_building = true;
             }
-            candidate->push_back({stamp,(f->flags & AV_FRAME_FLAG_KEY)!=0});
+            try {
+                auto started=Clock::now();
+                auto candidate=std::make_shared<std::vector<Timing>>();
+                Input scan(path,&o); auto f=frame();
+                std::optional<std::int64_t> delta; bool variable=false;
+                while(scan.next(f.get())) {
+                    geometry(f.get(),o);
+                    require_resource(candidate->size()<std::uint64_t(o.max_scan_frames),"index exceeds max_scan_frames");
+                    auto stamp=pts(f.get());
+                    if(!candidate->empty()) {
+                        require(stamp>candidate->back().pts,"non-increasing PTS cannot be indexed unambiguously");
+                        auto d=stamp-candidate->back().pts;
+                        if(delta && d!=*delta) variable=true;
+                        delta=d;
+                    }
+                    candidate->push_back({stamp,(f->flags & AV_FRAME_FLAG_KEY)!=0});
+                }
+                require_unchanged();
+                Stats completed;
+                completed.indexed_frames=static_cast<std::int64_t>(candidate->size());
+                completed.index_reached_eof=true;
+                completed.timing=variable?"variable_pts_observed":"uniform_pts_in_scanned_range";
+                completed.index_seconds=seconds(started);
+                {
+                    std::lock_guard lock(mutex);
+                    index_stats=completed;
+                    index=std::move(candidate); // Publish only a complete, unchanged index.
+                    ++diagnostics.index_builds;
+                    diagnostics.index_scanned_frames+=completed.indexed_frames;
+                    index_building=false;
+                }
+                index_changed.notify_all();
+                return;
+            } catch (...) {
+                {
+                    std::lock_guard lock(mutex);
+                    index_building=false;
+                }
+                index_changed.notify_all();
+                throw;
+            }
         }
-        require_unchanged();
-        Stats completed;
-        completed.indexed_frames=static_cast<std::int64_t>(candidate->size());
-        completed.index_reached_eof=true;
-        completed.timing=variable?"variable_pts_observed":"uniform_pts_in_scanned_range";
-        completed.index_seconds=seconds(started);
-        index_stats=completed;
-        index=std::move(candidate); // Publish only a complete, unchanged index.
-        ++diagnostics.index_builds;
-        diagnostics.index_scanned_frames+=completed.indexed_frames;
     }
 };
 

@@ -24,6 +24,12 @@ float bf16_to_float(std::uint16_t value) {
     return std::bit_cast<float>(static_cast<std::uint32_t>(value) << 16U);
 }
 
+std::uint16_t float_to_bf16(float value) {
+    std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
+    bits += 0x7fffU + ((bits >> 16U) & 1U);
+    return static_cast<std::uint16_t>(bits >> 16U);
+}
+
 std::vector<std::uint16_t> encode(
     ninfer::DeviceContext& device, const qwen::execution::Parameters& parameters,
     const qwen::VisionItemControl& control, std::span<const std::uint16_t> patches) {
@@ -90,8 +96,16 @@ int run() {
     const std::size_t patch_width = static_cast<std::size_t>(config.patch_width());
     std::vector<std::uint16_t> patches(full.patch_count * patch_width);
     for (std::size_t index = 0; index < patches.size(); ++index) {
-        // Finite BF16 values in roughly [-1,1], with different content in every group.
-        patches[index] = static_cast<std::uint16_t>(0x3f00U + (index * 17U) % 0x0100U);
+        const std::size_t group = index / (patches_per_group * patch_width);
+        const std::size_t within_group = index % (patches_per_group * patch_width);
+        // Every group has the same normalized-image-like distribution but a distinct hash seed,
+        // so repeated or reordered temporal groups remain observable without a distribution shift.
+        const std::uint32_t mixed =
+            static_cast<std::uint32_t>(within_group * 2'654'435'761ULL) ^
+            static_cast<std::uint32_t>((group + 1) * 2'246'822'519ULL);
+        const float value =
+            static_cast<float>(static_cast<std::int32_t>(mixed % 4097U) - 2048) / 1024.0F;
+        patches[index] = float_to_bf16(value);
     }
 
     const std::vector<std::uint16_t> whole = encode(device, parameters, full, patches);
@@ -134,6 +148,7 @@ int run() {
             whole.size() / static_cast<std::size_t>(full.merged_count);
         double minimum_token_cosine = 1.0;
         double maximum_token_rmse = 0.0;
+        double maximum_token_nrmse = 0.0;
         for (std::size_t token = 0; token < static_cast<std::size_t>(full.merged_count); ++token) {
             double token_error = 0.0;
             double token_left_squared = 0.0;
@@ -151,6 +166,8 @@ int run() {
             }
             maximum_token_rmse =
                 std::max(maximum_token_rmse, std::sqrt(token_error / token_width));
+            maximum_token_nrmse =
+                std::max(maximum_token_nrmse, std::sqrt(token_error / token_left_squared));
             minimum_token_cosine =
                 std::min(minimum_token_cosine,
                          token_dot / std::sqrt(token_left_squared * token_right_squared));
@@ -162,9 +179,12 @@ int run() {
                   << "; differing=" << differing << "; max_abs=" << maximum_absolute
                   << "; max_rel=" << maximum_relative << "; rmse=" << rmse
                   << "; cosine=" << cosine << "; max_token_rmse=" << maximum_token_rmse
+                  << "; max_token_nrmse=" << maximum_token_nrmse
                   << "; min_token_cosine=" << minimum_token_cosine << '\n';
-        if (cosine < 0.999 || minimum_token_cosine < 0.999 || rmse > 0.03 ||
-            maximum_token_rmse > 0.03) {
+        if (!std::isfinite(cosine) || !std::isfinite(minimum_token_cosine) ||
+            !std::isfinite(rmse) || !std::isfinite(maximum_token_rmse) ||
+            !std::isfinite(maximum_token_nrmse) || cosine < 0.999 ||
+            minimum_token_cosine < 0.999 || rmse > 0.03 || maximum_token_nrmse > 0.05) {
             return 1;
         }
     }

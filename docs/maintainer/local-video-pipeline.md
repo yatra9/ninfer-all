@@ -170,11 +170,14 @@ and returns the account to zero rather than exceeding the configured capacity.
 
 On the RTX 3090 target, a real Qwen3.8-27B Vision tower encoded the same deterministic four-group
 patch payload once as a complete item and once as 1+2+1 temporal-group slices. The direct 81,920
-BF16-element embedding comparison measured overall cosine similarity 0.999871 and RMSE 0.012337;
-the worst individual token measured cosine 0.999868 and RMSE 0.0229542. The standalone regression
-requires both overall and per-token cosine to remain at least 0.999 and both RMSE values to remain at
-most 0.03. Exact BF16 equality is not expected because changing the patch batch shape changes CUDA
-GEMM selection and rounding through the Vision layers.
+BF16-element embedding comparison measured overall cosine similarity 0.999908 and RMSE 0.0133091;
+the worst individual token measured cosine 0.999886 and normalized RMSE 0.028944. The standalone
+regression requires both overall and per-token cosine to remain at least 0.999, overall absolute
+RMSE at most 0.03, and per-token RMSE normalized by the reference token RMS at most 0.05. It rejects non-finite
+outputs or metrics. Its temporal groups use distinct hashed inputs with the same `[-2,2]`
+distribution, so repeated or reordered groups cannot pass through periodic input. Exact BF16
+equality is not required; the measured difference is retained as empirical qualification rather
+than attributed to a particular CUDA route without route-level evidence.
 
 The same 256-token video was also executed through overlay Vision once with a 256-token envelope
 and once as four 64-token chunks. The greedy first token matched, its logprob differed by 0.07572,

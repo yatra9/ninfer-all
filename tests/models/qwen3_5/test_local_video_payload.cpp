@@ -71,6 +71,56 @@ void run(const std::filesystem::path& path) {
     ninfer::OwnedLocalVideo input;
     input.path = path;
     input.deinterlace = ninfer::LocalVideoDeinterlace::Off;
+    auto contended_source = std::make_shared<lv::VideoSource>(path);
+    std::promise<void> index_started;
+    std::promise<void> release_index;
+    auto release_index_future = release_index.get_future().share();
+    std::atomic<unsigned> builder_checkpoints{0};
+    lv::Options builder_options;
+    builder_options.checkpoint = [&] {
+        if (builder_checkpoints.fetch_add(1, std::memory_order_relaxed) == 1) {
+            index_started.set_value();
+            release_index_future.wait();
+        }
+    };
+    auto builder = std::async(std::launch::async, [&] {
+        return contended_source->plan(builder_options);
+    });
+    index_started.get_future().wait();
+    std::atomic<bool> cancel_waiter{false};
+    lv::Options waiter_options;
+    waiter_options.checkpoint = [&] {
+        if (cancel_waiter.load(std::memory_order_relaxed)) {
+            throw std::runtime_error("cancelled index waiter");
+        }
+    };
+    auto waiter = std::async(std::launch::async, [&] {
+        try {
+            (void)contended_source->plan(waiter_options);
+            return false;
+        } catch (const std::runtime_error&) { return true; }
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    cancel_waiter.store(true, std::memory_order_relaxed);
+    const bool waiter_ready =
+        waiter.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready;
+    expect(waiter_ready, "a request waiting for another index build cancels promptly");
+    release_index.set_value();
+    (void)builder.get();
+    expect(waiter.get(), "a request waiting for another index build reports cancellation");
+
+    bool source_pixels_are_budget = false;
+    try {
+        lv::VideoSource pixel_limited(path);
+        lv::Options pixel_options;
+        pixel_options.max_pixels = 1024;
+        (void)pixel_limited.plan(pixel_options);
+    } catch (const lv::Error& error) {
+        source_pixels_are_budget = error.kind() == lv::ErrorKind::ResourceLimit;
+    }
+    expect(source_pixels_are_budget,
+           "source pixel limit is reported as a typed resource limit before decoder setup");
+
     auto cancelled_source_cache = std::make_shared<fi::LocalVideoSourceCache>(1);
     std::atomic<unsigned> planning_checkpoints{0};
     bool planning_cancelled = false;
