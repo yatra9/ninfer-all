@@ -179,5 +179,9 @@ GEMM selection and rounding through the Vision layers.
 The same 256-token video was also executed through overlay Vision once with a 256-token envelope
 and once as four 64-token chunks. The greedy first token matched, its logprob differed by 0.07572,
 and 19 of the top 20 alternatives were shared. A 1024x768, 256-frame input completed as 98,304
-Vision tokens in seven chunks. A client disconnect during that workload cancelled the request and
-the next media request completed, demonstrating request cleanup and overlay restoration.
+Vision tokens in seven chunks. With the 163,840-token RTX 3090 launch profile, process RSS was
+12,897,168 kB before that request and reached a 13,259,916 kB high-water mark: a 362,748 kB
+(354.25 MiB) request-time increase. RSS after completion was 12,970,668 kB, 73,500 kB (71.78 MiB)
+above the baseline. The HTTP 200 response completed in 100.41 seconds with a 99,403-token prompt.
+A client disconnect during the same workload cancelled the request and the next media request
+completed, demonstrating request cleanup and overlay restoration.
