@@ -1454,7 +1454,7 @@ private:
                 : static_cast<std::uint32_t>(blocked);
         const auto reserved = resources_.reserve_active_capture(
             *instance_.program, *request->lane, std::move(offer), blocked_runnable_requests,
-            CancellationFlagView{&request->cancelled});
+            CancellationFlagView{&request->cancelled, request->deadline});
         if (reserved == ResourceManagement::ActiveCaptureReserveResult::Skipped) {
             ++cumulative_stats_.active_captures_skipped;
             return;
@@ -1635,14 +1635,14 @@ private:
                 slots_[lane] != nullptr) {
                 throw std::logic_error("materializing request has invalid Engine ownership");
             }
-            cancellation = CancellationFlagView{&request->cancelled};
+            cancellation = CancellationFlagView{&request->cancelled, request->deadline};
             break;
         }
         case ContextTransactionKind::ActiveCapture:
             if (materializing_ || !capture) {
                 throw std::logic_error("active capture has conflicting Engine ownership");
             }
-            cancellation = CancellationFlagView{&capture->cancelled};
+            cancellation = CancellationFlagView{&capture->cancelled, capture->deadline};
             break;
         }
 
@@ -1791,7 +1791,7 @@ private:
         try {
             reserved = resources_.reserve_materialization(
                 *instance_.program, std::move(choice), std::move(request->prompt),
-                CancellationFlagView{&request->cancelled});
+                CancellationFlagView{&request->cancelled, request->deadline});
         } catch (const std::bad_alloc& oom) {
             publish_diagnostic(diagnostics_, DiagnosticLevel::Warning,
                                "out of memory during materialization reserve: %s", oom.what());

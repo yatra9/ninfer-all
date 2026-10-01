@@ -1236,7 +1236,8 @@ private:
     [[nodiscard]] bool hybrid_stage(HybridMaterializationTransaction& transaction,
                                     const PreparedPromptData& prompt);
     // Builds the lane from the staged, Device-resident source.
-    [[nodiscard]] StartResult hybrid_activate(HybridMaterializationTransaction& transaction);
+    [[nodiscard]] StartResult hybrid_activate(HybridMaterializationTransaction& transaction,
+                                              runtime::CancellationFlagView cancellation);
     void hybrid_abort_materialization(HybridMaterializationTransaction& transaction) noexcept;
     void hybrid_prompt_keys(const PreparedPromptData& prompt, std::vector<std::uint64_t>& hashes,
                             std::vector<std::uint64_t>& extras) const;

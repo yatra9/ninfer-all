@@ -11,6 +11,7 @@
 #include "models/qwen3_5/program/vision_control.h"
 #include "models/qwen3_5/program/planning/startup.h"
 #include "models/qwen3_5/program/vision_prefill.h"
+#include "runtime/contract/request.h"
 
 #include <array>
 #include <cstddef>
@@ -86,20 +87,23 @@ public:
     VisionPrefillSession(DeviceContext& device, const execution::Parameters& parameters,
                          DeviceSpan workspace, const VisionWorkspacePlan& workspace_plan,
                          qwen3_5::PreparedPromptData& prompt, const VisionPrefillPlan& plan,
-                         std::size_t& handoff_peak_bytes);
+                         std::size_t& handoff_peak_bytes,
+                         runtime::CancellationFlagView request_control);
     // Overlay residency: items are encoded inside windows brokered by the Program. The bridge
     // staging holds the one visual column an MTP bridge composes outside a prefill chunk.
     VisionPrefillSession(DeviceContext& device, const execution::Parameters& parameters,
                          const VisionWorkspacePlan& window_plan,
                          qwen3_5::PreparedPromptData& prompt, const VisionPrefillPlan& plan,
                          std::size_t& handoff_peak_bytes, VisionResidencyBroker& broker,
-                         PinnedResultPool::Handle result, DeviceSpan bridge_staging);
+                         PinnedResultPool::Handle result, DeviceSpan bridge_staging,
+                         runtime::CancellationFlagView request_control);
     // CPU residency: items are encoded on CPU threads, the next one beside other lanes' decode, and
     // staged from host memory like overlay results.
     VisionPrefillSession(DeviceContext& device, const execution::Parameters& parameters,
                          const VisionWorkspacePlan& cpu_plan, qwen3_5::PreparedPromptData& prompt,
                          const VisionPrefillPlan& plan, std::size_t& handoff_peak_bytes,
-                         DeviceSpan bridge_staging);
+                         DeviceSpan bridge_staging,
+                         runtime::CancellationFlagView request_control);
     ~VisionPrefillSession();
 
     [[nodiscard]] VisionChunk prepare_chunk(std::uint32_t begin, std::uint32_t nominal_length);
@@ -133,6 +137,7 @@ private:
     qwen3_5::PreparedPromptData& prompt_;
     const VisionPrefillPlan& plan_;
     std::size_t& handoff_peak_bytes_;
+    runtime::CancellationFlagView request_control_;
     std::optional<VisionContext> context_;
     std::unique_ptr<VisionOverlaySession> overlay_;
     std::unique_ptr<CpuVisionSession> cpu_;

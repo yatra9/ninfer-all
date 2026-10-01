@@ -363,7 +363,8 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
                     *request.prefill->vision_plan, vision_handoff_peak_bytes,
                     DeviceSpan{static_cast<std::byte*>(workspace_storage.base()) +
                                    workspace_plan.vision_bridge_offset,
-                               workspace_plan.vision_bridge_bytes});
+                               workspace_plan.vision_bridge_bytes},
+                    cancellation);
                 // The first item starts encoding on CPU threads while other lanes decode.
                 request.prefill->vision->submit_next_item();
             } else if (vision_broker) {
@@ -373,7 +374,8 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
                     vision_results->acquire(),
                     DeviceSpan{static_cast<std::byte*>(workspace_storage.base()) +
                                    workspace_plan.vision_bridge_offset,
-                               workspace_plan.vision_bridge_bytes});
+                               workspace_plan.vision_bridge_bytes},
+                    cancellation);
                 // Start the first item now so its window overlaps the decode rounds that run
                 // before this lane gets a prefill unit.
                 request.prefill->vision->submit_next_item();
@@ -382,7 +384,7 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
                     device, parameters,
                     DeviceSpan{workspace_storage.base(), workspace_storage.capacity()},
                     *workspace_plan.vision, request.prefill->prompt, *request.prefill->vision_plan,
-                    vision_handoff_peak_bytes);
+                    vision_handoff_peak_bytes, cancellation);
             }
         }
         request.prefill->elapsed_seconds =

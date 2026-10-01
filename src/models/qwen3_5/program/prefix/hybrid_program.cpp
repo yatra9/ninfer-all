@@ -568,7 +568,7 @@ ProgramImpl::progress_hybrid_materialization(runtime::CancellationFlagView cance
         }
         out.diagnostics.cached_prefix_tokens = transaction.quote->cached_prefix_tokens;
         out.diagnostics.restored_host_bytes  = transaction.restore_bytes;
-        out.published.emplace(hybrid_activate(transaction));
+        out.published.emplace(hybrid_activate(transaction, cancellation));
     } catch (...) {
         // The abort returns the state slot a landing restore may still be writing.
         if (transaction.restore_ticket != 0) {
@@ -717,7 +717,8 @@ void ProgramImpl::hybrid_abort_materialization(
     } catch (...) { std::terminate(); }
 }
 
-StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& transaction) {
+StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& transaction,
+                                         runtime::CancellationFlagView cancellation) {
     const HybridQuoteImpl& quote = *transaction.quote;
     PreparedPromptData& prompt   = transaction.prompt;
     const std::uint32_t lane     = quote.destination;
@@ -1023,7 +1024,8 @@ StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& trans
                     *request.prefill->vision_plan, vision_handoff_peak_bytes,
                     DeviceSpan{static_cast<std::byte*>(workspace_storage.base()) +
                                    workspace_plan.vision_bridge_offset,
-                               workspace_plan.vision_bridge_bytes});
+                               workspace_plan.vision_bridge_bytes},
+                    cancellation);
                 // The first item starts encoding on CPU threads while other lanes decode.
                 request.prefill->vision->submit_next_item();
             } else if (vision_broker) {
@@ -1033,14 +1035,15 @@ StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& trans
                     vision_results->acquire(),
                     DeviceSpan{static_cast<std::byte*>(workspace_storage.base()) +
                                    workspace_plan.vision_bridge_offset,
-                               workspace_plan.vision_bridge_bytes});
+                               workspace_plan.vision_bridge_bytes},
+                    cancellation);
                 request.prefill->vision->submit_next_item();
             } else {
                 request.prefill->vision = std::make_unique<execution::VisionPrefillSession>(
                     device, parameters,
                     DeviceSpan{workspace_storage.base(), workspace_storage.capacity()},
                     *workspace_plan.vision, request.prefill->prompt, *request.prefill->vision_plan,
-                    vision_handoff_peak_bytes);
+                    vision_handoff_peak_bytes, cancellation);
             }
         }
 

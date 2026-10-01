@@ -448,10 +448,11 @@ VisionWorkspacePlan plan_cpu_vision_workspace(std::int32_t output_hidden,
 VisionPrefillSession::VisionPrefillSession(
     DeviceContext& device, const execution::Parameters& parameters, DeviceSpan workspace,
     const VisionWorkspacePlan& workspace_plan, qwen3_5::PreparedPromptData& prompt,
-    const VisionPrefillPlan& plan, std::size_t& handoff_peak_bytes)
+    const VisionPrefillPlan& plan, std::size_t& handoff_peak_bytes,
+    runtime::CancellationFlagView request_control)
     : device_(device), parameters_(parameters), workspace_(workspace),
       workspace_plan_(workspace_plan), prompt_(prompt), plan_(plan),
-      handoff_peak_bytes_(handoff_peak_bytes) {
+      handoff_peak_bytes_(handoff_peak_bytes), request_control_(request_control) {
     context_.emplace(device, parameters);
     if (workspace_.data == nullptr || workspace_.bytes < workspace_plan_.capacity_bytes) {
         throw std::invalid_argument("Vision prefill workspace plan is invalid");
@@ -468,10 +469,11 @@ VisionPrefillSession::VisionPrefillSession(
     DeviceContext& device, const execution::Parameters& parameters,
     const VisionWorkspacePlan& window_plan, qwen3_5::PreparedPromptData& prompt,
     const VisionPrefillPlan& plan, std::size_t& handoff_peak_bytes, VisionResidencyBroker& broker,
-    PinnedResultPool::Handle result, DeviceSpan bridge_staging)
+    PinnedResultPool::Handle result, DeviceSpan bridge_staging,
+    runtime::CancellationFlagView request_control)
     : device_(device), parameters_(parameters), workspace_{}, workspace_plan_(window_plan),
       prompt_(prompt), plan_(plan), handoff_peak_bytes_(handoff_peak_bytes),
-      bridge_staging_(bridge_staging) {
+      request_control_(request_control), bridge_staging_(bridge_staging) {
     overlay_ = std::make_unique<VisionOverlaySession>(device, broker, parameters, window_plan,
                                                       std::move(result));
     const std::size_t column_bytes =
@@ -489,10 +491,11 @@ VisionPrefillSession::VisionPrefillSession(
 VisionPrefillSession::VisionPrefillSession(
     DeviceContext& device, const execution::Parameters& parameters,
     const VisionWorkspacePlan& cpu_plan, qwen3_5::PreparedPromptData& prompt,
-    const VisionPrefillPlan& plan, std::size_t& handoff_peak_bytes, DeviceSpan bridge_staging)
+    const VisionPrefillPlan& plan, std::size_t& handoff_peak_bytes, DeviceSpan bridge_staging,
+    runtime::CancellationFlagView request_control)
     : device_(device), parameters_(parameters), workspace_{}, workspace_plan_(cpu_plan),
       prompt_(prompt), plan_(plan), handoff_peak_bytes_(handoff_peak_bytes),
-      bridge_staging_(bridge_staging) {
+      request_control_(request_control), bridge_staging_(bridge_staging) {
     cpu_ = std::make_unique<CpuVisionSession>(parameters.model.cpu_vision());
     const std::size_t column_bytes = static_cast<std::size_t>(cpu_plan.output_hidden) * 2;
     if (bridge_staging_.data == nullptr || bridge_staging_.bytes < column_bytes) {
@@ -584,8 +587,13 @@ VisionPrefillSession::payload_for(const VisionUseSpan& use) {
 #else
     auto& reader = local_video_readers_[use.prepared_item_index];
     if (!reader) {
+        const PreparationControl control{
+            .deadline = request_control_.deadline,
+            .cancellation = CancellationView{
+                [request_control = request_control_] { return request_control.requested(); }},
+        };
         reader = std::make_unique<qwen3_5::frontend::LocalVideoPayloadReader>(
-            *prompt_.local_videos[use.prepared_item_index]);
+            *prompt_.local_videos[use.prepared_item_index], control);
     }
     return reader->read_chunk(use.local_chunk_index);
 #endif

@@ -5,6 +5,8 @@
 #include <ninfer/types.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
@@ -112,6 +114,39 @@ void run(const std::filesystem::path& path) {
     const auto stats = prepared.source->source_stats();
     expect(stats.index_builds == 1, "planning builds the source index once");
     expect(stats.index_reuses >= 2, "reference and payload readers reuse the prepared index");
+
+    std::atomic<unsigned> checkpoints{0};
+    ninfer::PreparationControl cancelled{
+        .deadline = {},
+        .cancellation = ninfer::CancellationView{
+            [&checkpoints] { return checkpoints.fetch_add(1, std::memory_order_relaxed) >= 2; }},
+    };
+    bool reported_cancelled = false;
+    try {
+        fi::LocalVideoPayloadReader interrupted(prepared, cancelled);
+        (void)interrupted.read_chunk(0);
+    } catch (const ninfer::RequestError& error) {
+        reported_cancelled = error.kind() == ninfer::RequestErrorKind::Cancelled;
+    }
+    expect(reported_cancelled, "payload decoding reports cancellation from an in-flight checkpoint");
+
+    fi::LocalVideoPayloadReader recovery(prepared);
+    auto recovered = recovery.read_chunk(0);
+    expect(!recovered->span().empty(),
+           "a fresh request reads the shared source after an interrupted reader is destroyed");
+
+    bool reported_deadline = false;
+    try {
+        fi::LocalVideoPayloadReader expired(
+            prepared, ninfer::PreparationControl{
+                          .deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1),
+                          .cancellation = {},
+                      });
+        (void)expired.read_chunk(0);
+    } catch (const ninfer::RequestError& error) {
+        reported_deadline = error.kind() == ninfer::RequestErrorKind::QueueTimeout;
+    }
+    expect(reported_deadline, "payload decoding reports an expired request deadline");
 }
 
 } // namespace
@@ -120,7 +155,17 @@ void run(const std::filesystem::path& path) {
 // This definition is enabled only by the standalone WSLC source-level validation command.
 #ifdef NINFER_LOCAL_VIDEO_PAYLOAD_STANDALONE
 namespace ninfer::models::qwen3_5::frontend {
-void check_preparation_control(const PreparationControl&, std::string_view) {}
+void check_preparation_control(const PreparationControl& control, std::string_view stage) {
+    if (control.cancellation.requested()) {
+        throw RequestError(RequestErrorKind::Cancelled,
+                           std::string(stage) + " cancelled");
+    }
+    if (control.deadline != std::chrono::steady_clock::time_point{} &&
+        std::chrono::steady_clock::now() >= control.deadline) {
+        throw RequestError(RequestErrorKind::QueueTimeout,
+                           std::string(stage) + " exceeded request deadline");
+    }
+}
 } // namespace ninfer::models::qwen3_5::frontend
 #endif
 
