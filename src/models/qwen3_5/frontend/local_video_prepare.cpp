@@ -205,9 +205,12 @@ prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl
     check_preparation_control(control, "local video planning");
     // The preparation control belongs to this call. Execution installs its own request control.
     options.checkpoint = {};
+    const media::local_video::SourceStats source_stats = source->source_stats();
     return PreparedLocalVideoInput{
         .source = std::move(source),
         .reader_options = std::move(options),
+        .index_stats = video.index_stats,
+        .source_stats = source_stats,
         .prompt = std::move(prompt),
     };
 }

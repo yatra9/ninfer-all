@@ -139,6 +139,7 @@ struct PrepareStats {
     std::size_t media_singleflight_waits = 0;
     std::size_t built_patch_bytes        = 0;
     std::size_t reused_patch_bytes       = 0;
+    std::vector<LocalVideoPreparationStats> local_videos;
 };
 
 // Prompt boundary facts for hybrid prefix-cache tap placement

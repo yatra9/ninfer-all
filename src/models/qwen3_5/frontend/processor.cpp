@@ -1056,6 +1056,24 @@ ProcessedInput Processor::process(std::vector<ChatMessage> messages,
                 continue;
             }
             local_video_tokens += local->prompt.total_tokens;
+            const auto& first = local->prompt.selected_frames.front();
+            const auto& last = local->prompt.selected_frames.back();
+            stats.local_videos.push_back(LocalVideoPreparationStats{
+                .width = local->prompt.width,
+                .height = local->prompt.height,
+                .selected_frames = local->prompt.selected_frames.size(),
+                .chunks = local->prompt.chunks.size(),
+                .vision_tokens = local->prompt.total_tokens,
+                .first_source_index = first.source_index,
+                .last_source_index = last.source_index,
+                .first_source_pts = first.source_pts,
+                .last_source_pts = last.source_pts,
+                .first_timestamp_seconds = first.timestamp_seconds,
+                .last_timestamp_seconds = last.timestamp_seconds,
+                .index_builds = local->source_stats.index_builds,
+                .index_reuses = local->source_stats.index_reuses,
+                .index_seconds = local->index_stats.index_seconds,
+            });
             PreprocessStats item_stats;
             add_budget(item_stats, item);
             add_budget(stats, item);

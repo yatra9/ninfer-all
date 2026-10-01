@@ -67,7 +67,7 @@ public:
     PreparedPrompt& operator=(const PreparedPrompt&) = delete;
 
     [[nodiscard]] PromptSummary summary() const;
-    [[nodiscard]] PromptPreparationStats preparation_stats() const noexcept;
+    [[nodiscard]] PromptPreparationStats preparation_stats() const;
     [[nodiscard]] explicit operator bool() const noexcept;
     [[nodiscard]] std::unique_ptr<NgramArchive::Request> bind_ngram(NgramArchive& archive,
                                                                     const NgramSessionHints& hints);

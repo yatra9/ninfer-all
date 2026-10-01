@@ -77,6 +77,7 @@ struct PreprocessStats {
     double media_preprocess_seconds      = 0.0;
     double media_preprocess_work_seconds = 0.0;
     double tokenize_seconds              = 0.0;
+    std::vector<LocalVideoPreparationStats> local_videos;
 
     [[nodiscard]] std::string summary() const;
 };

@@ -820,7 +820,7 @@ PromptSummary PreparedPrompt::summary() const {
                          .has_media           = data_->has_media()};
 }
 
-PromptPreparationStats PreparedPrompt::preparation_stats() const noexcept {
+PromptPreparationStats PreparedPrompt::preparation_stats() const {
     if (data_ == nullptr) { return {}; }
     const PrepareStats& stats = data_->prepare;
     return PromptPreparationStats{
@@ -838,6 +838,7 @@ PromptPreparationStats PreparedPrompt::preparation_stats() const noexcept {
         .media_singleflight_waits      = stats.media_singleflight_waits,
         .built_patch_bytes             = stats.built_patch_bytes,
         .reused_patch_bytes            = stats.reused_patch_bytes,
+        .local_videos                  = stats.local_videos,
     };
 }
 
@@ -1001,6 +1002,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         result.prepare.media_singleflight_waits = processed.stats.media_singleflight_waits;
         result.prepare.built_patch_bytes        = processed.stats.built_patch_bytes;
         result.prepare.reused_patch_bytes       = processed.stats.reused_patch_bytes;
+        result.prepare.local_videos             = std::move(processed.stats.local_videos);
         result.prepare.media_preprocess_seconds = processed.stats.media_preprocess_seconds;
         result.prepare.media_preprocess_work_seconds =
             processed.stats.media_preprocess_work_seconds;

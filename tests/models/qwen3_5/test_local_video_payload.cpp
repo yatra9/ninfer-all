@@ -122,6 +122,9 @@ void run(const std::filesystem::path& path) {
     expect(repeated.source->source_stats().index_builds == 1 &&
                repeated.source->source_stats().index_reuses > stats.index_reuses,
            "a later request reuses rather than rebuilds the completed index");
+    expect(repeated.source_stats.index_builds == 1 && repeated.source_stats.index_reuses >= 3 &&
+               repeated.index_stats.index_seconds > 0.0,
+           "prepared diagnostics retain the request-visible index reuse and scan timing");
 
     std::atomic<unsigned> checkpoints{0};
     ninfer::PreparationControl cancelled{

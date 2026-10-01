@@ -251,6 +251,23 @@ Json request_json(const RequestLogContext& context) {
 
 Json preparation_json(const RequestLogContext& context) {
     const PromptPreparationStats& stats = context.preparation;
+    Json local_videos = Json::array();
+    for (const auto& video : stats.local_videos) {
+        local_videos.push_back({{"width", video.width},
+                                {"height", video.height},
+                                {"selected_frames", video.selected_frames},
+                                {"chunks", video.chunks},
+                                {"vision_tokens", video.vision_tokens},
+                                {"first_source_index", video.first_source_index},
+                                {"last_source_index", video.last_source_index},
+                                {"first_source_pts", video.first_source_pts},
+                                {"last_source_pts", video.last_source_pts},
+                                {"first_timestamp_seconds", video.first_timestamp_seconds},
+                                {"last_timestamp_seconds", video.last_timestamp_seconds},
+                                {"index_builds", video.index_builds},
+                                {"index_reuses", video.index_reuses},
+                                {"index_seconds", video.index_seconds}});
+    }
     return Json{{"total", stats.seconds},
                 {"acquisition", context.acquisition_seconds},
                 {"media_preprocess", stats.media_preprocess_seconds},
@@ -265,7 +282,8 @@ Json preparation_json(const RequestLogContext& context) {
                 {"cache_misses", stats.media_cache_misses},
                 {"singleflight_waits", stats.media_singleflight_waits},
                 {"built_patch_bytes", stats.built_patch_bytes},
-                {"reused_patch_bytes", stats.reused_patch_bytes}};
+                {"reused_patch_bytes", stats.reused_patch_bytes},
+                {"local_videos", std::move(local_videos)}};
 }
 
 Json rejected_request_json(const RequestRejectionLogContext& context) {

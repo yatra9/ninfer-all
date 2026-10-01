@@ -37,6 +37,8 @@ private:
 struct PreparedLocalVideoInput {
     std::shared_ptr<media::local_video::VideoSource> source;
     media::local_video::Options reader_options;
+    media::local_video::Stats index_stats;
+    media::local_video::SourceStats source_stats;
     LocalVideoPromptPlan prompt;
 };
 

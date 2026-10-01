@@ -912,6 +912,23 @@ struct PromptSummary {
     bool has_media              = false;
 };
 
+struct LocalVideoPreparationStats {
+    int width = 0;
+    int height = 0;
+    std::uint64_t selected_frames = 0;
+    std::uint64_t chunks = 0;
+    std::uint64_t vision_tokens = 0;
+    std::int64_t first_source_index = -1;
+    std::int64_t last_source_index = -1;
+    std::int64_t first_source_pts = 0;
+    std::int64_t last_source_pts = 0;
+    double first_timestamp_seconds = 0.0;
+    double last_timestamp_seconds = 0.0;
+    std::int64_t index_builds = 0;
+    std::int64_t index_reuses = 0;
+    double index_seconds = 0.0;
+};
+
 struct PromptPreparationStats {
     double seconds                       = 0.0;
     double media_preprocess_seconds      = 0.0;
@@ -927,6 +944,7 @@ struct PromptPreparationStats {
     std::size_t media_singleflight_waits = 0;
     std::size_t built_patch_bytes        = 0;
     std::size_t reused_patch_bytes       = 0;
+    std::vector<LocalVideoPreparationStats> local_videos;
 };
 
 struct MediaCacheSummary {
