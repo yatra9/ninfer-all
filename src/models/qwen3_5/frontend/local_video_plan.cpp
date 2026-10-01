@@ -16,7 +16,8 @@ constexpr int kAlignment = kPatch * kMerge;
 
 std::uint64_t checked_mul(std::uint64_t left, std::uint64_t right, const char* label) {
     if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left) {
-        throw std::invalid_argument(std::string("local video ") + label + " overflow");
+        throw LocalVideoPlanError(LocalVideoPlanErrorKind::InvalidInput,
+                                  std::string("local video ") + label + " overflow");
     }
     return left * right;
 }
@@ -30,23 +31,28 @@ plan_local_video_prompt(int output_width, int output_height,
                         std::uint64_t maximum_chunk_tokens) {
     if (output_width < kAlignment || output_height < kAlignment ||
         output_width % kAlignment != 0 || output_height % kAlignment != 0) {
-        throw std::invalid_argument("local video output dimensions must be positive multiples of 32");
+        throw LocalVideoPlanError(LocalVideoPlanErrorKind::InvalidInput,
+                                  "local video output dimensions must be positive multiples of 32");
     }
     if (selected_frames.empty()) {
-        throw std::invalid_argument("local video selection contains no frames");
+        throw LocalVideoPlanError(LocalVideoPlanErrorKind::InvalidInput,
+                                  "local video selection contains no frames");
     }
     if (maximum_total_tokens == 0 || maximum_chunk_tokens == 0) {
-        throw std::invalid_argument("local video token limits must be positive");
+        throw LocalVideoPlanError(LocalVideoPlanErrorKind::InvalidInput,
+                                  "local video token limits must be positive");
     }
     for (std::size_t index = 0; index < selected_frames.size(); ++index) {
         const auto& frame = selected_frames[index];
         if (!std::isfinite(frame.timestamp_seconds)) {
-            throw std::invalid_argument("local video frame timestamp must be finite");
+            throw LocalVideoPlanError(LocalVideoPlanErrorKind::InvalidInput,
+                                      "local video frame timestamp must be finite");
         }
         if (index != 0 &&
             (frame.source_index <= selected_frames[index - 1].source_index ||
              frame.timestamp_seconds < selected_frames[index - 1].timestamp_seconds)) {
-            throw std::invalid_argument("local video frame timings must be in display order");
+            throw LocalVideoPlanError(LocalVideoPlanErrorKind::InvalidInput,
+                                      "local video frame timings must be in display order");
         }
     }
 
@@ -59,7 +65,9 @@ plan_local_video_prompt(int output_width, int output_height,
         checked_mul(static_cast<std::uint64_t>(plan.grid_height / kMerge),
                     static_cast<std::uint64_t>(plan.grid_width / kMerge), "spatial token count");
     if (plan.tokens_per_temporal_group > maximum_chunk_tokens) {
-        throw std::invalid_argument("one local video temporal group exceeds Vision chunk capacity");
+        throw LocalVideoPlanError(
+            LocalVideoPlanErrorKind::BudgetExceeded,
+            "one local video temporal group exceeds Vision chunk capacity");
     }
 
     const std::uint64_t temporal_groups =
@@ -67,7 +75,8 @@ plan_local_video_prompt(int output_width, int output_height,
     plan.total_tokens =
         checked_mul(temporal_groups, plan.tokens_per_temporal_group, "total token count");
     if (plan.total_tokens > maximum_total_tokens) {
-        throw std::invalid_argument("local video tokens exceed request budget");
+        throw LocalVideoPlanError(LocalVideoPlanErrorKind::BudgetExceeded,
+                                  "local video tokens exceed request budget");
     }
 
     plan.selected_frames.assign(selected_frames.begin(), selected_frames.end());

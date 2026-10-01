@@ -5,9 +5,24 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace ninfer::models::qwen3_5::frontend {
+
+enum class LocalVideoPlanErrorKind { InvalidInput, BudgetExceeded };
+
+class LocalVideoPlanError final : public std::invalid_argument {
+public:
+    LocalVideoPlanError(LocalVideoPlanErrorKind kind, std::string message)
+        : std::invalid_argument(std::move(message)), kind_(kind) {}
+    [[nodiscard]] LocalVideoPlanErrorKind kind() const noexcept { return kind_; }
+
+private:
+    LocalVideoPlanErrorKind kind_;
+};
 
 struct LocalVideoChunkPlan {
     std::size_t temporal_begin = 0;

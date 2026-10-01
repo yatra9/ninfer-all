@@ -163,7 +163,7 @@ prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl
                           std::uint64_t maximum_total_tokens,
                           std::uint64_t maximum_chunk_tokens) {
     check_preparation_control(control, "local video planning");
-    auto source = std::make_shared<media::local_video::VideoSource>(input.path);
+    std::shared_ptr<media::local_video::VideoSource> source;
     media::local_video::Options options;
     options.start = input.start_frame;
     options.end = input.end_frame;
@@ -177,10 +177,21 @@ prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl
     options.deinterlace = convert_deinterlace(input.deinterlace);
     options.checkpoint = [&control] { check_preparation_control(control, "local video planning"); };
 
-    media::local_video::VideoPlan video = source->plan(options);
-    LocalVideoPromptPlan prompt =
-        plan_local_video_prompt(video.width, video.height, video.selected_frames,
-                                maximum_total_tokens, maximum_chunk_tokens);
+    media::local_video::VideoPlan video;
+    LocalVideoPromptPlan prompt;
+    try {
+        source = std::make_shared<media::local_video::VideoSource>(input.path);
+        video = source->plan(options);
+        prompt = plan_local_video_prompt(video.width, video.height, video.selected_frames,
+                                         maximum_total_tokens, maximum_chunk_tokens);
+    } catch (const LocalVideoPlanError& error) {
+        throw ProcessorError(error.kind() == LocalVideoPlanErrorKind::BudgetExceeded
+                                 ? ProcessorErrorKind::BudgetExceeded
+                                 : ProcessorErrorKind::InvalidMedia,
+                             error.what());
+    } catch (const std::runtime_error& error) {
+        throw ProcessorError(ProcessorErrorKind::InvalidMedia, error.what());
+    }
     check_preparation_control(control, "local video planning");
     // The preparation control belongs to this call. Execution installs its own request control.
     options.checkpoint = {};
