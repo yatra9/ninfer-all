@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
@@ -148,6 +149,32 @@ void run(const std::filesystem::path& path) {
         live_limit_reported = error.kind() == ninfer::RequestErrorKind::MediaBudgetExceeded;
     }
     expect(live_limit_reported, "local chunk obeys the shared live-memory capacity");
+
+    const std::size_t one_chunk_bytes =
+        prepared.prompt.chunks.front().temporal_count *
+        static_cast<std::size_t>(prepared.prompt.grid_height) * prepared.prompt.grid_width *
+        ninfer::models::qwen3_5::kPreparedVisionPatchFeatures * sizeof(std::uint16_t);
+    auto shared_account = std::make_shared<fi::MediaPreprocessCache>(0, one_chunk_bytes, 1,
+                                                                     one_chunk_bytes);
+    auto request_a = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,
+                                                    shared_account);
+    auto request_b = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,
+                                                    shared_account);
+    fi::LocalVideoPayloadReader reader_a(request_a);
+    auto held = reader_a.read_chunk(0);
+    auto competing = std::async(std::launch::async, [&request_b] {
+        fi::LocalVideoPayloadReader reader_b(request_b);
+        return reader_b.read_chunk(0);
+    });
+    expect(competing.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout,
+           "a concurrent local chunk waits instead of exceeding shared live memory");
+    held.reset();
+    auto admitted = competing.get();
+    expect(admitted && shared_account->stats().live_bytes == one_chunk_bytes,
+           "waiting local chunk is admitted after the first releases its reservation");
+    admitted.reset();
+    expect(shared_account->stats().live_bytes == 0,
+           "concurrent local chunk reservations fully return to the shared account");
     expect(actual == expected,
            "sequential chunk payloads exactly equal the independently decoded full payload");
 

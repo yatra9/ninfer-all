@@ -164,7 +164,9 @@ the existing Program transaction cleanup remain authoritative for GPU failure re
 The CPU payload regression concatenates every chunk from a deterministic H.264 video and compares
 all BF16 patch elements exactly with an independently decoded full payload. Runtime control tests
 compare prompt token IDs, token types, positions, timestamps, patch ranges, and global scatter
-columns exactly.
+columns exactly. A shared live-memory regression holds one request's chunk while a second request
+materializes the same chunk under a one-chunk capacity: the second waits, proceeds after release,
+and returns the account to zero rather than exceeding the configured capacity.
 
 On the RTX 3090 target, the same 256-token video was executed through overlay Vision once with a
 256-token envelope and once as four 64-token chunks. The greedy first token matched, its logprob
