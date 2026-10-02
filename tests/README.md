@@ -58,6 +58,13 @@ serve option tests are standalone too, so these checks can build independently o
 The HTTP cases run with suspend enabled and disabled for ordinary slash aliases and aliases ending
 in one or two `/residency` segments; model detail, status, model list and generation must retain the
 exact public alias without route collisions.
+The HTTP suite also covers default automatic resume and explicit manual suspension, strict boolean
+body validation, policy changes while suspended, all three generation protocols, SSE, rejected
+authentication/input/model IDs without restoration, token-count exclusion and failed automatic resume.
+Linux standalone `ninfer_auto_resume_test` holds restore at a test-only CUDA synchronization gate:
+concurrent requests must share one restore, count against ingress capacity and respect cancellation
+and pending deadlines. A cancelled leader must leave other requests usable; an injected restore
+failure must reach all waiters and prevent subsequent automatic retry.
 `ninfer_qwen3_5_suspend_real_test` is a standalone opt-in real-artifact acceptance executable:
 pass an explicit artifact, PNG and KV capacity. It checks exact text and Vision token vectors
 over three fresh-backing resumes, forces actual overlay execution, and reports KV versus weight

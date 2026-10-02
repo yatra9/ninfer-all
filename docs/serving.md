@@ -71,26 +71,39 @@ curl http://127.0.0.1:8080/v1/models/qwen3.8-27b/residency
 curl -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8080/v1/models/qwen3.8-27b/resume
 ```
 
-These routes use the normal API-key authentication. POST requires an empty JSON object.
+These routes use normal API-key authentication. Suspend accepts `{}` (default `auto_resume: true`)
+or an object containing only boolean `auto_resume`; resume accepts only `{}`. Use `{"auto_resume": false}` while another
+process needs exclusive use of the released GPU memory.
 Suspend immediately returns 409 `model_busy` while requests, media preparation, response
 reservations, context transfers or residency operations are active; it never cancels them.
-Repeated suspend while suspended and resume while ready return the current state with HTTP 200.
+Repeated suspend while suspended updates `auto_resume` without GPU operations and returns HTTP 200;
+omitting the field resets it to true. Resume while ready returns the current state with HTTP 200.
 
 Suspend releases physical weight, persistent and workspace backing while retaining their virtual
 addresses, CUDA Graphs and CPU metadata. Persistent capacity is copied into ordinary host RAM;
 resume uploads weights from the original artifact and restores persistent bytes to the same addresses.
 Keep every artifact part unchanged and accessible until the process exits. Workspace receives fresh
-backing. Model/Program reconstruction and implicit resume do not occur.
+backing. Model/Program reconstruction does not occur. The public Engine itself remains explicitly
+managed; automatic resume is the serving admission policy for the current suspension.
 
-Inference endpoints return HTTP 503 before SSE starts while the model is suspending, suspended,
-resuming or in error. `/health` reports 503 when unavailable. Model listing, residency status and
+With `auto_resume: true`, valid generation requests to `/v1/chat/completions`, `/v1/responses` and
+`/v1/messages` resume a suspended model and execute after restoration. Concurrent requests share
+one resume and hold normal ingress reservations while waiting. Waiting counts toward the pending
+deadline; excess requests return 429, timeout returns 503 `request_queue_timeout`, and disconnected
+requests are cancelled without cancelling the shared restore. A failed resume returns 500
+`model_residency_error` to its waiting requests; later requests return 503 `model_error` without retry.
+Authentication, model ID and basic input validation precede automatic resume; SSE starts afterward.
+`auto_resume: false` rejects suspended generation with 503 `model_suspended`. Suspending and ERROR
+always reject generation; Resuming accepts waiters only with `auto_resume: true`. Model listing,
+status, token counting and Responses compact never initiate resume.
+`/health` reports 503 when unavailable. Model listing, residency status and
 diagnostics remain available. A fatal residency failure returns 500 for management operations and
 retains `last_error` and the persistent snapshot until process shutdown; restart the process to recover.
 Failed pool attachment releases pieces already created by that attempt. If cleanup itself fails,
 the remaining backing stays tracked for cleanup at shutdown and appears in residency byte counts.
 CPU-only zero-output submissions use the same admission boundary as residency transitions.
 
-The residency JSON reports state, enabled flag, known NInfer backing bytes, snapshot bytes,
+The residency JSON reports state, enabled and `auto_resume` flags, known NInfer backing bytes, snapshot bytes,
 artifact-read/H2D byte counts and the last operation timings. Device byte counts exclude CUDA
 context/driver/graph allocations and VA reservations. VMM map, persistent D2H/H2D and weight upload
 are timed separately; weight restore includes transcode read/conversion/upload and the existing
@@ -294,7 +307,7 @@ this adds a CPU synchronization point and mask transfers per round. No speedup c
 | `GET /v1/models` | configured OpenAI model alias, effective `max_model_len` (also as `context_window`), whether it accepts images, and a llama.cpp-compatible `meta` object (see [Models](#models)) |
 | `GET /v1/models/{id}` | lookup of the configured alias with the same fields |
 | `GET /v1/models/{id}/residency` | CPU snapshot of model residency and last operation metrics |
-| `POST /v1/models/{id}/suspend`, `POST /v1/models/{id}/resume` | explicit idle residency management; body `{}`, requires `--enable-model-suspend` |
+| `POST /v1/models/{id}/suspend`, `POST /v1/models/{id}/resume` | idle residency management; suspend body `{}` or boolean `auto_resume` (default true), resume body `{}`; requires `--enable-model-suspend` |
 | `POST /v1/chat/completions` | OpenAI-style chat generation |
 | `POST /v1/responses` | OpenAI Responses Core generation, state, typed Items, and SSE |
 | `POST /v1/responses/input_tokens` | Responses prompt-token count without generation |

@@ -83,9 +83,12 @@ void run(bool enabled, const std::string& alias) {
                 "disabled suspend broke alias generation");
         return;
     }
-    for (const auto* body : {"", "{", "[]", "null", "{\"memory_class\":\"weights\"}"}) {
+    for (const auto* body : {"", "{", "[]", "null", "{\"memory_class\":\"weights\"}",
+                            "{\"auto_resume\":null}", "{\"auto_resume\":1}",
+                            "{\"auto_resume\":\"false\"}", "{\"auto_resume\":true,\"other\":0}"}) {
         post(base + "/suspend", body, 400);
     }
+    post(base + "/resume", R"({"auto_resume":true})", 400);
     // A completed zero-output generation still has a service response reservation until released.
     GenerationRequest request;
     request.messages.push_back(ChatTurn{.role = ChatRole::User,
@@ -95,10 +98,11 @@ void run(bool enabled, const std::string& alias) {
     require(post(base + "/suspend", "{}", 409)["error"]["code"] == "model_busy",
             "suspend ignored service response reservation");
     prepared = {};
-    const auto suspended = post(base + "/suspend", "{}", 200);
+    const auto suspended = post(base + "/suspend", R"({"auto_resume":false})", 200);
     require(suspended["state"] == "suspended" && suspended["retained_device_bytes"] == 0 &&
             suspended["persistent_snapshot_bytes"].get<std::size_t>() > 0, "incomplete HTTP suspend");
-    require(post(base + "/suspend", "{}", 200)["state"] == "suspended", "HTTP suspend not idempotent");
+    require(suspended["auto_resume"] == false, "manual suspend policy lost");
+    require(post(base + "/suspend", R"({"auto_resume":false})", 200)["state"] == "suspended", "HTTP suspend not idempotent");
     get(base + "/residency", 200);
     get("/v1/models", 200);
     get("/stats", 200);
@@ -120,15 +124,47 @@ void run(bool enabled, const std::string& alias) {
     get("/health", 200);
     const auto generation = post("/v1/chat/completions", generation_body.dump(), 200);
     require(generation["usage"]["completion_tokens"] == 3, "HTTP generation did not recover after resume");
+    for (const auto* path : {"/v1/chat/completions", "/v1/responses", "/v1/messages"}) {
+        post(base + "/suspend", R"({"auto_resume":false})", 200);
+        require(post(base + "/suspend", "{}", 200)["auto_resume"] == true,
+                "default suspend did not reset auto_resume while suspended");
+        const auto before = get(base + "/residency", 200);
+        post(path, "{}", 400);
+        auto wrong_model = generation_body;
+        wrong_model["model"] = "unknown";
+        post("/v1/chat/completions", wrong_model.dump(), 404);
+        auto unauthorized = client.Post(path, "{}", "application/json");
+        require(unauthorized && unauthorized->status == 401, "auto resume bypassed authentication");
+        for (const auto* count_path : {"/v1/responses/input_tokens", "/v1/messages/count_tokens"}) {
+            post(count_path, "{}", 503);
+        }
+        require(get(base + "/residency", 200)["state"] == "suspended" &&
+                before["retained_device_bytes"] == 0, "non-generation request resumed model");
+        Json body = generation_body;
+        if (std::string_view(path) == "/v1/responses") {
+            body = {{"model", alias}, {"input", "hello"}, {"max_output_tokens", 3}, {"store", false}};
+        } else if (std::string_view(path) == "/v1/messages") {
+            body.erase("ignore_eos");
+        }
+        post(path, body.dump(), 200);
+        require(get(base + "/residency", 200)["state"] == "ready", "generation did not auto resume");
+    }
+    post(base + "/suspend", R"({"auto_resume":true})", 200);
+    auto streaming = generation_body;
+    streaming["stream"] = true;
+    auto stream = client.Post("/v1/chat/completions", auth, streaming.dump(), "application/json");
+    require(stream && stream->status == 200 && stream->body.find("data: [DONE]") != std::string::npos,
+            "streaming generation did not resume before SSE");
     post(base + "/suspend", "{}", 200);
     const auto timestamp = std::filesystem::last_write_time(fixture.file.entry);
     std::filesystem::last_write_time(fixture.file.entry, timestamp + std::chrono::seconds(10));
-    require(post(base + "/resume", "{}", 500)["error"]["code"] == "model_residency_error",
-            "resume failure misclassified");
+    require(post("/v1/chat/completions", generation_body.dump(), 500)["error"]["code"] == "model_residency_error",
+            "automatic resume failure misclassified");
     const auto failed = get(base + "/residency", 200);
     require(failed["state"] == "error" && !failed["last_error"].get<std::string>().empty() &&
             failed["persistent_snapshot_bytes"].get<std::size_t>() > 0, "ERROR diagnostics unavailable");
     post(base + "/suspend", "{}", 500);
+    post(base + "/resume", "{}", 500);
     post("/v1/responses", "{}", 503);
 }
 }

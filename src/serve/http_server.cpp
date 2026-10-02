@@ -388,7 +388,9 @@ httplib::Server::HandlerResponse HttpServer::pre_route(const httplib::Request& r
             (req.path == "/v1/chat/completions" || req.path == "/v1/responses" ||
              req.path == "/v1/responses/input_tokens" || req.path == "/v1/responses/compact" ||
              req.path == "/v1/messages" || req.path == "/v1/messages/count_tokens")) {
-            service_->require_available();
+            const bool generation = req.path == "/v1/chat/completions" ||
+                                    req.path == "/v1/responses" || req.path == "/v1/messages";
+            service_->require_available(generation);
         }
         return httplib::Server::HandlerResponse::Unhandled;
     };
@@ -785,20 +787,28 @@ void HttpServer::handle_model_residency(const httplib::Request& req, httplib::Re
         error.message = "model '" + model + "' not found";
         throw ApiException(std::move(error));
     }
+    bool auto_resume = true;
     if (operation != "residency") {
         const auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded() || !body.is_object() || !body.empty()) {
+        const bool valid_suspend = operation == "suspend" && body.is_object() &&
+            body.size() == 1 && body.contains("auto_resume") && body["auto_resume"].is_boolean();
+        if (body.is_discarded() || !body.is_object() || (!body.empty() && !valid_suspend)) {
             ApiError error;
             error.code = "invalid_request_body";
-            error.message = "model residency request body must be an empty JSON object";
+            error.message = operation == "suspend"
+                ? "suspend body must be {} or contain only boolean auto_resume"
+                : "resume body must be an empty JSON object";
             throw ApiException(std::move(error));
         }
+        if (valid_suspend) { auto_resume = body["auto_resume"].get<bool>(); }
     }
     try {
-        const auto status = operation == "suspend" ? service_->suspend()
+        const auto status = operation == "suspend" ? service_->suspend(auto_resume)
                             : operation == "resume" ? service_->resume() : service_->residency();
         res.set_header("Cache-Control", "no-store");
-        res.set_content(model_residency_report(public_model_id_, status).dump(), "application/json");
+        auto report = model_residency_report(public_model_id_, status);
+        report["auto_resume"] = status.auto_resume;
+        res.set_content(report.dump(), "application/json");
     } catch (const ModelResidencyError& error) {
         throw ApiException(residency_error_to_api_error(error));
     }

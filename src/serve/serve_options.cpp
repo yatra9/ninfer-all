@@ -151,7 +151,7 @@ std::string serve_usage_text(const char* argv0) {
            "  --rope-scaling-original-context N\n"
            "                                the interpolation threshold (default: the\n"
            "                                model's native window)\n"
-           "  --enable-model-suspend        enable explicit idle suspend/resume (single GPU)\n"
+           "  --enable-model-suspend        enable idle suspend/resume (single GPU; HTTP auto-resume default)\n"
            "  --wddm-evictable-budget       Windows D3D12 builds: budget against dedicated\n"
            "                                memory, holding arenas resident\n"
            "\n"

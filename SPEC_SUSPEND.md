@@ -39,8 +39,7 @@ Qwen3.8-27B は通常時に RTX 3090 の VRAM をほぼ使い切るため、画�
 - CUDA context の破棄 / 再生成
 - CUDA GraphExec の破棄 / 再 capture
 - model process の停止 / 再起動
-- suspend 中に通常 inference request を queue して自動待機
-- request 到着時の自動 resume
+- `auto_resume:false`での停止中にinferenceをqueueして待機する機能
 - arbitrary な memory class を API caller が細かく指定する機能
 
 初期版は **request 間の安全な境界でのみ suspend** する。
@@ -515,7 +514,8 @@ v1 request body:
 
 初期版では caller に memory class を選ばせない。
 
-管理POSTのbodyは空JSON objectのみ許可する。空body、array、null、未知fieldは400。
+suspend bodyは`{}`または`{"auto_resume":true|false}`のみ許可する。省略時はtrue。
+resume bodyは`{}`のみ。空body、array、null、未知field、boolean以外のauto_resumeは400。
 管理routeは既存API-key認証と公開model alias（`--model-id`を含む）を使用し、未知modelは404。
 公開aliasはslashや末尾`/residency`を含められる。`GET /v1/models/{alias}`の完全一致は
 常に既存model detailを返し、状態照会はそのURLへさらに`/residency`を追加する。
@@ -529,6 +529,7 @@ flag未指定のsuspend/resumeは400 `model_suspend_disabled`、residency照会�
   "object": "model.residency",
   "model": "qwen3.8-27b",
   "state": "suspended",
+  "auto_resume": true,
   "released_device_bytes": 21438267392,
   "retained_device_bytes": 183500800,
   "persistent_snapshot_bytes": 3824132096
@@ -581,7 +582,19 @@ GET /v1/models/{model}/residency
 
 ### 12.4 READY 以外での inference
 
-`/v1/responses`、`/v1/chat/completions` 等は自動 resume しない。`SUSPENDING` / `SUSPENDED` / `RESUMING` 中は 503 を返す。
+HTTPの生成API `/v1/responses`、`/v1/chat/completions`、`/v1/messages` は、
+SUSPENDEDかつauto_resume=trueなら認証・model ID・基本的な入力検証後にresumeを1回実行し、
+完了後に元の要求を実行する。auto_resumeは今回の停止のHTTP受付方針であり、Engine自体は明示管理のまま。
+同時要求は同じresume完了を待ち、待機中も既存のservice受付上限とpending deadlineに含める。
+待機数超過は429、待機中のtimeoutは503 request_queue_timeout、切断は499。
+resumeを開始した要求の切断・timeoutでも共有restoreは完了させ、他要求を巻き込まない。
+復帰失敗は待機要求に500 model_residency_errorを返し、ERRORとsnapshotを保持する。
+後続要求は503 model_errorで拒否し、自動再試行しない。SSEは復帰完了後に開始する。
+
+auto_resume=falseのSUSPENDED、SUSPENDING、ERRORは生成を503で拒否する。
+RESUMINGはauto_resume=trueのとき既存のservice resume完了を待ち、falseでは503を返す。
+モデル一覧・residency・health・診断・token counting・Responses compactでは自動復帰しない。
+状態JSONにauto_resumeを公開する。次のsuspendで省略すればtrueへ戻り、resumeはどちらの方針でも使用できる。
 
 ```text
 503 Service Unavailable
@@ -600,7 +613,7 @@ GET /v1/models/{model}/residency
 }
 ```
 
-`SUSPENDING` / `RESUMING` では、それぞれ現在状態に対応する message / code を返してよい。
+自動復帰対象外の`SUSPENDING` / `RESUMING`では現在状態に対応するmessage/codeを返す。
 
 ### 12.5 suspend busy
 
@@ -629,7 +642,7 @@ active request / transfer / transaction が存在する場合:
 
 推奨仕様:
 
-- `suspend` on `SUSPENDED`: 200 を返して現在状態を返す
+- `suspend` on `SUSPENDED`: GPU操作なしでauto_resumeを更新し、200で現在状態を返す
 - `resume` on `READY`: 200 を返して現在状態を返す
 - `suspend` on `SUSPENDING` / `RESUMING`: 409
 - `resume` on `SUSPENDING` / `RESUMING`: 409
@@ -919,7 +932,7 @@ v1 では、複数モデル管理、自動切替、resource class 指定 API、L
 3. GraphExec を破棄して resume 時に再 capture する
 4. suspendable allocation の VA reservation を解放する
 5. active request / GPU work 実行中に backing を unmap する
-6. suspended 中の inference request で暗黙 auto-resume する
+6. auto_resume=falseの停止、ERROR、または状態照会/token countingで自動resumeする
 7. 17 GiB 級 weight full mirror を RAM に常駐させる
 8. v1 で `persistent` を control / KV / state / transient 等へ分割する
 9. v1 で KV page payload と execution tables の backing を分離する
@@ -948,7 +961,8 @@ v1 では、複数モデル管理、自動切替、resource class 指定 API、L
 - [x] `/v1/models/{model}/suspend` 実装
 - [x] `/v1/models/{model}/resume` 実装
 - [x] `/v1/models/{model}/residency` 実装
-- [x] suspended 中 inference が 503
+- [x] auto_resume=falseのsuspended中inferenceが503
+- [x] HTTP suspendのauto_resume省略時true、3生成APIの共有resume、受付上限/切断/timeout/ERROR処理
 - [x] busy suspend が 409
 - [x] suspend/resume の繰り返し試験で leak / corruption がない
 - 対象外: 画像MCPとの連携検証（最新ユーザー指示）。

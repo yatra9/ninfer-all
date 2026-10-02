@@ -249,6 +249,10 @@ Device 操作。shutdown 与 residency 操作串行，失败后保持 ERROR、�
 restore 开始或 residency ERROR 撤销资格；保存只读取已完成写入的 Host slabs 和 CPU index，不访问 GPU backing。
 
 GenerationService 在同一短 capacity lock 下协调 admission reservation 与管理操作入口，
+并拥有每次 HTTP suspend 的 auto_resume 方针（省略为 true）。生成请求在协议验证后占用既有 ingress
+reservation，首请求调用显式 Engine resume；其余请求通过 condition variable 等待同次 restore，等待受
+pending deadline 与取消约束。leader 取消不会中断共有 restore。auto_resume=false、ERROR、状态/token
+查询不自动恢复；Engine 不拥有 HTTP 方针，也不在 submit 内隐式恢复。
 因此尚在 media acquisition、token counting 或 response lifetime 的请求也返回 Busy。
 capacity lock 不跨 snapshot/upload 持有；它不拥有第二套模型状态。HTTP 认证后、解析/获取 media
 及开启 SSE 前检查 Engine availability；最终 service admission 与 Engine submit 仍再次检查。

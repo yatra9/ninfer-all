@@ -5,6 +5,7 @@
 ## 0. 現在地と再開地点
 
 - 要件の正本は [SPEC_SUSPEND.md](SPEC_SUSPEND.md)。本書は実装順序、対象コード、検証、未確定事項を管理する。
+- 最新追加: HTTP suspendのauto_resumeは省略時true、false指定時のみ停止中の生成を即座に503で拒否する。共有restore・bounded受付・切断/deadline/ERRORの追加実装と検証は末尾「HTTP生成要求による共有auto resume」を参照。Engine自身の明示管理契約は維持する。
 - 実装開始（2026-10-02）。P0専用PoC `tests/test_vmm_suspend.cu` を追加し、WSLCの既存
   `ninfer-syntax:dev`、CUDA 13.1.115、RTX 3090でcompile/run成功。1000回のphysical backing
   解放・新規create・same-VA mapを、単一capture/instantiateのGraphExecで検証した。
@@ -124,6 +125,8 @@ HTTP層には独立したstate machineを置かない。起動完了フラグと
 workerはREADY以外ではGPU処理を開始しない。submitの予約・queue投入の両段階と、
 public APIの即時完了経路にもavailability検査を適用する。
 HTTPではmedia acquisition前に早期拒否し、最終的なEngine submitでも再検査する。
+HTTPの生成要求はauto_resume=trueのSUSPENDED/RESUMINGに限り、service予約後に共有resumeの
+完了を待ってからmedia acquisitionとsubmitへ進む。方針はserviceが所有し、Engineの受付契約は維持する。
 CPUでprepare中にsuspendが成立した場合も、後続submitは503となりGPUへ到達しない。
 prepareがGPUへ触れる経路が見つかれば同じ実行権の管理対象に含める。
 
@@ -477,3 +480,15 @@ Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages
 - 検証環境: 既存ninfer-suspend-dev / WSLC Linux / RTX3090 / CUDA13.1 / GCC13。prepare-build.sh後、ninfer-serveとHTTP testの-j8増分build/link成功。同名CTestの6構成すべてPASS（16.68秒）。build logは /tmp/ninfer-residency-alias-fix-build.log。
 - 未実施: Windows native、全suite、実モデル100cycleの再実行。画像MCP連携は対象外。Hybrid修正のEngine/completion/upload/旧HTTPのPASSは直前のcheckpointに記載済みであり、このHTTP修正はGPU実行・復元処理を変更しない。
 - 残作業: HTTPの6構成PASSを確認済み。この修正単位をcommitし、今回の監査2指摘への対応を完了する。追加の実装作業はない。再検証にはninfer_model_suspend_testとninfer_model_residency_http_testをbuildして同名CTestを実行する。既存container/build tree/native model volumeは保持する。
+
+### 追加実装: HTTP生成要求による共有auto resume（2026-10-02）
+
+- 合意: POST suspendは{}またはboolean auto_resumeだけを許可し、省略時true。falseの停止では生成を503 model_suspendedで拒否。指定は今回の停止に適用し、次の省略でtrueへ戻る。停止済みの設定変更はGPU操作なし、遷移中は409。resume bodyは{}のまま。
+- 実装: GenerationServiceがHTTP方針とresume操作の共有完了通知を所有し、ServiceResidencyStatusでEngine statusにauto_resumeを付加する。Engine/Model/Program/VMM/復元処理とpublic Engineの明示管理は変更しない。HTTP認証・model・基本入力検証後、3生成API（chat/completions、responses、messages）はservice ingress予約を取得し、首要求だけがEngine::resumeを呼ぶ。他要求はcondition variableで同じrestoreを待つ。
+- 資源・異常契約: 復帰待ちもmax_concurrency+max_pending_requestsに含め、超過429。待機と復帰時間は既存pending deadlineに含める。待機中の切断/timeoutは予約を解放し、leader切断/timeoutでも共有restoreは完了させる。復帰失敗は待機要求へ500 model_residency_error、ERROR/snapshotを保持。後続要求は503 model_errorで拒否し再試行しない。status/health/list/token count/Responses compactでは自動復帰しない。SSEはREADY後に開始する。
+- HTTP回帰: 3alias × suspend有効/無効の6構成を維持し、strict body型検証、false停止の従来503、停止済みfalse→省略true更新、認証/不正body/未知modelでは復帰しないこと、token count除外、3生成protocolの自動復帰、chat streaming、復帰失敗の500と以後ERROR拒否を追加。ninfer_model_residency_http_test PASS（18.46秒）。
+- 新規Linux standalone ninfer_auto_resume_test: test-only linker wrapでpersistent復元同期をgateし、RESUMING中にleader/followerを確実に同居させる。復帰1回、受付枠2の超過429、RESUMING中の方針変更409、leader切断でもfollower生成成功、待機deadline/leader復帰後timeout、同期失敗の全waiterへの同一エラーと以後再試行禁止、予約残存0を検証。全3ケースPASS（4.59秒）。production hookは追加しない。
+- 検証環境: 既存ninfer-suspend-dev、WSLC Linux、RTX3090、CUDA13.1/GCC13。prepare-build.sh、ninfer-serve/HTTP test/新規testの-j8増分build/link成功。logは /tmp/ninfer-auto-resume-build.log と /tmp/ninfer-auto-resume-concurrency-build.log。
+- SPECの非目的/HTTP/冪等性/禁止事項/完了条件、serving API/例、Engine architecture、README、tests README、serve --helpを更新。全差分（新規test含む）レビュー・git diff --checkを実施。最終include/help変更後も製品と2testの増分build/link成功、serve --helpの自動resumeデフォルト表示を確認した。最終build logは /tmp/ninfer-auto-resume-final-build.log。
+- 未実施: Windows native、全suite、実モデル100cycle再実行。共有restoreの故障/gateテストはLinux専用。HTTP testは通常CUDA/VMM環境で使用できる。既存realモデルの復元時間は従来測定であり今回のHTTP待機TTFT測定ではない。画像MCP連携は対象外。
+- 残作業: 機能と回帰検証は完了。この機能単位をcommitし、追加作業なし。再検証はninfer_model_residency_http_testとninfer_auto_resume_testをbuildし同名CTestを実行する。既存container/build tree/model volumeは保持する。
