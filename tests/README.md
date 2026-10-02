@@ -37,6 +37,8 @@ opt-in/disabled handling, active and queued request rejection, repeated fresh-ba
 concurrent management/status calls, zero-output submission rejection while suspended and
 1000 zero-output submissions racing ten suspend/resume cycles,
 immutable-source failure with retained diagnostics/snapshot, and suspended/error destruction.
+An additional 32768-slot KV fixture checks three restores of a persistent snapshot larger than
+64 MiB, including token equality, device backing release and snapshot RAM release after resume.
 Hybrid Host-cache persistence is checked across both Ready and Suspended shutdown, followed by
 startup restoration of saved blocks/snapshots and generation comparison. Failed-resume ERROR
 shutdown must not save the cache.

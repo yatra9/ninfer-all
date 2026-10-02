@@ -111,6 +111,9 @@ overlapped artifact-read/upload pipeline, including transcode-only loads. Persis
 is checked before snapshot release and READY publication; asynchronous completion failures retain
 the snapshot and publish ERROR.
 Host snapshot capacity adds to the process RAM requirement while suspended.
+Persistent D2H timing includes snapshot allocation, page preparation, stream drain and the copy.
+Host pages are prepared before the copy, using up to four CPU workers for snapshots of at least
+64 MiB. This does not retain snapshot RAM after a successful resume.
 
 Vision is disabled by default: its weights and Vision-specific unified-workspace extent are not
 allocated, and media requests and token-count requests fail with HTTP 400 `vision_disabled`. Add

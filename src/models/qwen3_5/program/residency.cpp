@@ -2,9 +2,13 @@
 #include "core/evictable_kv_pool.h"
 
 #include <cuda_runtime.h>
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 #include <string>
+#include <system_error>
+#include <thread>
+#include <vector>
 
 namespace ninfer::models::qwen3_5 {
 namespace {
@@ -19,6 +23,37 @@ bool stream_idle(cudaStream_t stream) {
     if (result == cudaErrorNotReady) { return false; }
     residency_cuda(result, "query residency stream");
     return true;
+}
+
+void prepare_snapshot_pages(std::byte* storage, std::size_t bytes) {
+    // Touch one byte per 4 KiB instead of clearing the snapshot. This commits all pages on
+    // supported hosts before the synchronous pageable D2H enters its serial copy path.
+    constexpr std::size_t stride = 4096;
+    const auto pages = bytes / stride + (bytes % stride != 0);
+    const auto touch = [storage](std::size_t begin, std::size_t end) {
+        volatile std::byte* destination = storage;
+        for (auto page = begin; page < end; ++page) { destination[page * stride] = std::byte{}; }
+    };
+    if (bytes < 64ULL * 1024 * 1024) {
+        touch(0, pages);
+    } else {
+        const auto count = std::min(4U, std::max(1U, std::thread::hardware_concurrency()));
+        std::vector<std::jthread> workers;
+        workers.reserve(count);
+        for (unsigned i = 0; i < count; ++i) {
+            try {
+                workers.emplace_back(touch, pages * i / count, pages * (i + 1) / count);
+            } catch (const std::system_error&) {
+                // Page preparation is an optimization: if workers are unavailable, finish
+                // the unassigned pages on the caller while earlier workers finish theirs.
+                touch(pages * i / count, pages);
+                break;
+            }
+        }
+        // jthread destruction joins even if a later thread could not be created.
+    }
+    // new[] need not be page aligned: include the page containing the final byte.
+    if (bytes) { static_cast<volatile std::byte*>(storage)[bytes - 1] = std::byte{}; }
 }
 }
 
@@ -49,8 +84,9 @@ void detail::ProgramImpl::snapshot_persistent() {
     if (!parameters.model.options().enable_model_suspend || !residency_idle()) {
         throw std::logic_error("persistent snapshot requires suspend-enabled idle Program");
     }
-    // No value initialization and no pinned allocation: touching every byte happens in D2H.
+    // No full clear or pinned allocation. Commit pages before D2H; release after successful resume.
     auto snapshot = std::unique_ptr<std::byte[]>(new std::byte[persistent.capacity()]);
+    prepare_snapshot_pages(snapshot.get(), persistent.capacity());
     for (std::size_t rank = 0; rank < compute_streams.size(); ++rank) {
         residency_cuda(cudaStreamSynchronize(compute_streams[rank]), "drain compute stream");
         residency_cuda(cudaStreamSynchronize(transfer_streams[rank]), "drain transfer stream");

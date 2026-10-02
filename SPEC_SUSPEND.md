@@ -110,10 +110,19 @@ snapshot は model weights のような17 GiB級ではなく、Program persisten
 
 v1 は性能より単純性を優先し、snapshot buffer は通常の Host RAM でよい。必要なら後で chunked pinned staging を追加する。
 
+D2Hに先立ち4 KiB間隔と末尾の1 byteだけをtouchしてHostページを事前確保する。
+64 MiB未満はcallerで行い、64 MiB以上はCPU数を上限に最大4 workerへ分割する。
+全workerのjoin後にD2Hへ進む。OSによるthread作成失敗時は残りをcallerで処理し、
+既存workerもjoinする。Host確保例外時も既存workerをjoinしてからbufferを解放する。
+全量ゼロ埋め、全量pinned化、resume成功後のsnapshot用RAM保持は行わない。
+`persistent_snapshot_d2h_seconds`は従来どおりbuffer確保・ページ事前確保・stream drain・D2Hを含む。
+
 推奨実装:
 
 ```text
 D2H:
+  allocate ordinary Host snapshot
+  prepare Host pages; join workers
   cudaStreamSynchronize(all relevant streams)
   cudaMemcpy(host_persistent_snapshot,
              persistent.data(),

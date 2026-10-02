@@ -5,7 +5,8 @@
 ## 0. 現在地と再開地点
 
 - 要件の正本は [SPEC_SUSPEND.md](SPEC_SUSPEND.md)。本書は実装順序、対象コード、検証、未確定事項を管理する。
-- 最新追加（2026-10-03）: O_DIRECT 2並列を初回load/resume共通materializerへ組込み、回帰検証と実Engine測定を完了。最大64 MiB×4 stagingを維持。weight restoreは旧版6.25〜6.32秒→5.76秒、resume全体は測定間の変動あり。末尾「O_DIRECT 2並列の組込みと実Engine測定」に結果・再現手順・限界を記載。RAM保持案は保留。
+- 最新追加（2026-10-03）: suspendのsnapshot用Hostページを最大4 CPU workerで事前確保し、関連回帰検証と実Engine測定を完了。ページ確保を含むsuspend平均3.50秒→1.89秒（約46%短縮）。末尾「snapshotページ事前確保の並列化」に結果・再現手順・限界を記載。RAMの常時保持は追加していない。
+- 前追加（2026-10-03）: O_DIRECT 2並列を初回load/resume共通materializerへ組込み、回帰検証と実Engine測定を完了。最大64 MiB×4 stagingを維持。weight restoreは旧版6.25〜6.32秒→5.76秒、resume全体は測定間の変動あり。末尾「O_DIRECT 2並列の組込みと実Engine測定」に結果・再現手順・限界を記載。RAM保持案は保留。
 - HTTP追加: suspendのauto_resumeは省略時true、false指定時のみ停止中の生成を即座に503で拒否する。共有restore・bounded受付・切断/deadline/ERRORの追加実装と検証は末尾「HTTP生成要求による共有auto resume」を参照。Engine自身の明示管理契約は維持する。
 - 実装開始（2026-10-02）。P0専用PoC `tests/test_vmm_suspend.cu` を追加し、WSLCの既存
   `ninfer-syntax:dev`、CUDA 13.1.115、RTX 3090でcompile/run成功。1000回のphysical backing
@@ -515,3 +516,26 @@ Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages
 - docs: SPEC_SUSPEND.md、artifact-container、Engine architecture、tests READMEに並列read、bounded staging、slot/failure所有権と回帰検証を反映。
 - 未実施: Windows native build/実行、物理multi-GPU実行、全suite、100cycle実モデル/HTTP enduranceの再実行。Windowsの初回openとoverlapped完了同期はコード上対応済みで、実測済み経路はWSLC Linux/O_DIRECT。画像MCP連携は対象外、RAM保持はユーザーにより保留。
 - 次の具体的作業: 今回の組込みと測定は完了。この単位をcommitする。追加の最適化は未着手であり、次の指示がある場合は上記比較レポートを起点に対象を決める。devの増分build treeとnative model volumeは保持。再検証は上記2targetをbuildして同名CTestを実行し、実モデル比較は保存済みscriptを使用する。
+
+### 追加最適化: snapshotページ事前確保の並列化（2026-10-03）
+
+- ユーザー指示: suspendのpage fault対策として、snapshotページを並列に事前確保する方式を試し、確保時間を含むsuspend全体で比較する。効果を確認したため採用した。
+- 実装完了: Programの通常Host snapshotをnew[]で確保後、4 KiB間隔と末尾の1 byteをvolatile storeでtouchする。64 MiB未満はcaller、以上はhardware_concurrencyを上限に最大4 jthreadへページ範囲を分割。全worker join後に既存のstream drain/whole-arena D2Hへ進む。全量zero-fill、pinned化、追加の全量buffer、resume成功後のRAM保持は行わない。persistent_snapshot_d2h_secondsとlast_suspend_secondsにはbuffer確保・全ページ準備・drain・copyが全て含まれる。
+- 所有権・失敗: workerは新規Host bufferだけにアクセスしCUDAを呼ばない。jthreadのRAIIで例外時もjoinしてからsnapshotを破棄する。OS thread作成のsystem_errorは未割当の残ページをcallerが処理し、既存workerをjoinして続行する。new[]/worker用Host確保のbad_allocは既存のrecoverable Host allocation処理へ伝わり、Device backingを変更しない。snapshotの公開はD2H成功後、ERROR retentionとresume成功後のreleaseは維持する。
+- 回帰テスト追加: ninfer_model_suspend_testへcontext/KV/生成fixtureのposition capacityを32768に揃えた大容量caseを追加。64 MiB超のpersistent snapshotで3回の停止/復帰、retained device bytes=0、READY backing量一致、snapshot bytes=0、prefix reuseなしのraw token完全一致を必須とする。case終了後はfixtureのposition capacityを元へ戻す。初期のcontext/KVとmodel位置容量の不整合はtest設定を修正して解消済み。
+- build/check: 既存ninfer-suspend-dev、WSLC Linux、RTX3090、CUDA13.1/GCC13。/workspaceの変更sourceを/build/srcへコピーし、/build/suspend-build-dir記載の既存treeでcmake --build <build-dir> -jを使用。製品ninfer/ninfer-serve、ninfer_model_suspend_test、ninfer_suspend_restore_completion_testの増分compile/link成功。最終large-caseを含むmodel suspend CTest PASS（21.94秒）、restore completion CTest PASS（4.39秒、製品最終版の成功/同期失敗2ケース）。small snapshot、受付競合、生成、Hybrid保存、ERROR/snapshot保持、persistent H2D完了待ちを維持。全差分レビュー・git diff --checkを実施。
+- 実モデル測定: 前checkpointと同じnative /models/Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer、context/KV163840、rk8v4、FP16 GDN、MTP3、Vision overlay、HostKV8 GiB/HostState8、snapshot4,726,981,888 bytes。O_DIRECT2並列を含むd16a5c1fを基準とし、text/Vision warmup後に各processで5回のpublic Engine suspend/resumeと毎回の決定的text token照合を実施。profiler capture、build/link、他GPU testsとは重ねていない。以下は初回を除くcycle 1–4平均、秒（括弧はmin–max）。snapshot phaseはページ事前確保を含む。
+
+| 測定順 | suspend全体 | snapshot確保/準備/drain/D2H | unmap/release | resume全体 |
+|---|---:|---:|---:|---:|
+| 基準・前 | 3.504（3.366–3.724） | 2.723 | 0.781 | 7.547 |
+| 4並列試験版 | 2.135（1.876–2.245） | 1.339 | 0.796 | 7.327 |
+| 基準・後 | 4.224（3.617–5.046） | 3.350 | 0.875 | 10.221 |
+| 最終版（caller fallback付き） | 1.893（1.762–2.030） | 1.182 | 0.711 | 7.022 |
+
+- 初回cycleのsuspend/resume: 基準前5.023/6.880、試験版3.031/7.604、基準後6.043/10.873、最終版2.228/7.172秒。全4processの20/20 cycleでraw token一致、SUSPENDED device bytes=0、READY device bytes=22,865,248,256、snapshot容量一致、成功resume後snapshot bytes=0。終了後GPU使用量13 MiBへ戻る。
+- 解釈: 最終版suspendは基準前に対し1.61秒（約46%）短縮。snapshot phaseの短縮が主であり、事前確保を計測外へ移した結果ではない。minor faultsはwarm cycleで各版1,154,049のままで、faultを消すのではなく処理を並列化した。suspendのprocess CPU user+sys合計は基準前2.805秒→最終3.121秒（worker合算）であり、CPU仕事量は少し増えてwallが短縮する。基準後のpersistent H2Dは3.270秒まで変動し、resumeの7.547→7.022秒を今回の確定的な改善として主張しない。全モデル・RAM pressure下で同じ改善率を保証しない。
+- 記録: E:\koji\work\20260813\NInfer\tmp\suspend-acceptance\profile-20261002\suspend-comparison.md/json、suspend-baseline.*、suspend-prefault-trial.*、suspend-baseline-after.*、suspend-prefault.*、compare_suspend.py。基準binaryはprofile-parallel、最終binaryはprofile-prefault、実行scriptはsuspend-prefault.sh。同じmain.cppとcompile/link flagsで測定。repo .cache/build_suspend_profile.pyで既存static librariesから診断binaryを再linkできる。試験版と最終版の通常4worker経路は同じで、最終版にはthread不足時fallbackを追加して再測定した。
+- docs: SPEC_SUSPEND.mdのHost snapshot/D2H契約、servingの時間解釈、Engine architecture、tests READMEを更新。CLI/HTTP schema、snapshot形式と数値演算は変更していない。
+- 未実施: Windows native、全suite、100cycle/HTTP endurance再実行、OS thread枯渇とHost allocation failureの新規実機注入。既存故障契約は上記Engine/completion testsで確認。今回の新規worker shortage fallbackはコードレビューで確認し、通常並列経路は大容量fixtureと実モデル10cycleで実行した。画像MCP連携は対象外、weight RAM保持案は保留。
+- 次の具体的作業: 今回の最適化・測定は完了。この単位をcommitし、追加作業は次の指示待ち。chunked pinned stagingは未着手。再検証はninfer_model_suspend_testとninfer_suspend_restore_completion_testをbuildして同名CTestを実行し、実測は保存済みbaseline/candidate binaryとscriptを使用する。既存dev build treeとnative model volumeは保持する。

@@ -274,6 +274,35 @@ void run() {
         Engine engine(options(fixture, true));
         (void)engine.suspend(); // Destruction must not implicitly restore or touch unmapped state.
     }
+    auto& position_capacity = fixture.file.root["components"]["text"]["config"]["max_position_embeddings"];
+    const auto original_position_capacity = position_capacity;
+    position_capacity = 32768;
+    fixture.file.write();
+    {
+        auto configured = options(fixture, true);
+        configured.max_context = 32768;
+        configured.kv_capacity = KvCapacityPolicy::explicit_capacity(32768);
+        Engine engine(configured);
+        const auto ready_bytes = engine.residency().retained_device_bytes;
+        RequestOptions request;
+        request.execution.requested_output_tokens = 3;
+        request.execution.allow_prefix_reuse = false;
+        const auto baseline = engine.generate(engine.prepare_tokens({65, 66}), request).generated_token_ids;
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            const auto suspended = engine.suspend();
+            require(suspended.state == ModelResidencyState::Suspended &&
+                    suspended.persistent_snapshot_bytes >= 64ULL * 1024 * 1024 &&
+                    suspended.retained_device_bytes == 0, "large snapshot did not release device backing");
+            const auto resumed = engine.resume();
+            require(resumed.state == ModelResidencyState::Ready && resumed.persistent_snapshot_bytes == 0 &&
+                    resumed.retained_device_bytes == ready_bytes, "large snapshot restore retained RAM or lost backing");
+            require(engine.generate(engine.prepare_tokens({65, 66}), request).generated_token_ids == baseline &&
+                    baseline.size() == 3, "large snapshot restore changed generation");
+        }
+        std::cout << "PASS large persistent snapshot\n";
+    }
+    position_capacity = original_position_capacity;
+    fixture.file.write();
     check_hybrid_shutdown(fixture);
 }
 }
