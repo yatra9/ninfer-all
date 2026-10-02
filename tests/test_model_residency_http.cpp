@@ -22,12 +22,14 @@ struct Listener {
     explicit Listener(HttpServer& owner) : server(owner), worker([&owner] { (void)owner.listen(); }) {}
     ~Listener() { server.stop(); worker.join(); }
 };
-void run(bool enabled, const std::string& alias) {
+void run(bool enabled, const std::string& alias,
+         SuspendSnapshotMemory memory = SuspendSnapshotMemory::Pinned) {
     ninfer::test::qwen_fixture::ModelFixture fixture;
     ninfer::test::qwen_fixture::execution_fixture(fixture);
     ServeOptions options;
     options.artifact_path = fixture.file.entry;
     options.enable_model_suspend = enabled;
+    options.suspend_snapshot_memory = memory;
     options.max_context = 128;
     options.kv_capacity = KvCapacityPolicy::explicit_capacity(128);
     options.prefill_chunk = 128;
@@ -68,6 +70,10 @@ void run(bool enabled, const std::string& alias) {
     const auto ready = get(base + "/residency", 200);
     require(ready["object"] == "model.residency" && ready["model"] == alias &&
             ready["state"] == "ready" && ready["enabled"] == enabled, "wrong alias residency status");
+    const bool pinned = enabled && memory == SuspendSnapshotMemory::Pinned;
+    require(ready["persistent_snapshot_bytes"] == 0 && ready["persistent_snapshot_pinned"] == pinned &&
+            (ready["persistent_snapshot_capacity_bytes"].get<std::size_t>() > 0) == pinned,
+            "HTTP READY status confused allocated pinned capacity with valid snapshot");
     require(get("/v1/models", 200)["data"][0]["id"] == alias, "model list lost public alias");
     get("/v1/models/unknown/residency", 404);
     post("/v1/models/unknown/suspend", "{}", 404);
@@ -119,6 +125,8 @@ void run(bool enabled, const std::string& alias) {
     require(service.residency().state == ModelResidencyState::Suspended, "inference implicitly resumed model");
     const auto resumed = post(base + "/resume", "{}", 200);
     require(resumed["state"] == "ready" && resumed["persistent_snapshot_bytes"] == 0 &&
+            resumed["persistent_snapshot_capacity_bytes"] == ready["persistent_snapshot_capacity_bytes"] &&
+            resumed["persistent_snapshot_pinned"] == pinned &&
             resumed["weight_h2d_bytes"].get<std::uint64_t>() > 0, "incomplete HTTP resume");
     post(base + "/resume", "{}", 200);
     get("/health", 200);
@@ -178,7 +186,8 @@ int main() {
         for (const auto* alias : {"deployment/alias", "deployment/residency", "deployment/residency/residency"}) {
             for (const bool enabled : {true, false}) { run(enabled, alias); }
         }
-        std::cout << "PASS residency HTTP aliases with suspend enabled/disabled\n";
+        run(true, "deployment/pageable", SuspendSnapshotMemory::Pageable);
+        std::cout << "PASS residency HTTP aliases, enabled/disabled and pageable storage\n";
         return 0;
     }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

@@ -539,3 +539,25 @@ Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages
 - docs: SPEC_SUSPEND.mdのHost snapshot/D2H契約、servingの時間解釈、Engine architecture、tests READMEを更新。CLI/HTTP schema、snapshot形式と数値演算は変更していない。
 - 未実施: Windows native、全suite、100cycle/HTTP endurance再実行、OS thread枯渇とHost allocation failureの新規実機注入。既存故障契約は上記Engine/completion testsで確認。今回の新規worker shortage fallbackはコードレビューで確認し、通常並列経路は大容量fixtureと実モデル10cycleで実行した。画像MCP連携は対象外、weight RAM保持案は保留。
 - 次の具体的作業: 今回の最適化・測定は完了。この単位をcommitし、追加作業は次の指示待ち。chunked pinned stagingは未着手。再検証はninfer_model_suspend_testとninfer_suspend_restore_completion_testをbuildして同名CTestを実行し、実測は保存済みbaseline/candidate binaryとscriptを使用する。既存dev build treeとnative model volumeは保持する。
+
+### 追加実装: 起動時pinned snapshotと方式選択（2026-10-03、完了）
+
+- ユーザー指示: snapshot容量は初期化済みpersistent.capacity()から自動決定し、起動中ずっとpinned bufferを保持する。起動引数で方式を選択可能にし、引数省略時の既定はpinned。
+- 実装完了: --suspend-snapshot-memory pinned|pageable / EngineOptions::suspend_snapshot_memory。suspend有効かつpinned時のみProgram初期化完了前に同容量のPinnedHostBufferを一度確保。D2H成功でsnapshot有効、H2D完了/storage復帰成功で無効化するがbufferは保持する。pageableは従来のlazy確保・並列page準備・resume後解放。pin失敗は起動失敗で暗黙fallbackしない。無効時はbufferなし。既存ERROR保持/入場制御/同一VAを維持し、Program終了時にHost bufferを解放する。
+- 観測: residencyにpersistent_snapshot_capacity_bytesとpersistent_snapshot_pinnedを追加。persistent_snapshot_bytesは有効snapshotのみを数え、READYでは0。確保容量と有効データを区別する。Hostcache budgetとは別枠であり、pinnedはREADY中も同容量のHost RAMを必要とする。
+- build: WSLC Linux / ninfer-suspend-dev / RTX3090 / CUDA13.1 / GCC13、既存/build/suspend-build-dirのtreeを再利用してcmake --build -j。共通Options/Statusの変更に伴う188項目のCUDA/C++再コンパイルと、ninfer、ninfer-serve、関連testsのlink成功。ユーザー指示により一度agent作業だけ中断しbuildは継続、再開後に完了を確認。log /tmp/ninfer-pinned-build.log。CLI/serve最終target build成功、log /tmp/ninfer-pinned-final-build.log。製品両--helpで新flag/default pinnedを確認。
+- 回帰: CTest 6/6 PASS、合計62.84秒。ninfer_cli_options_test 0.00秒、ninfer_serve_options_test 0.83秒、ninfer_model_residency_http_test 21.46秒、ninfer_auto_resume_test 4.21秒、ninfer_model_suspend_test 24.01秒、ninfer_suspend_restore_completion_test 12.31秒。log /tmp/ninfer-pinned-tests.log。CLI/serveの既定・明示選択・不正/欠落値・Engine伝達、無効時bufferなし、大容量32768-KVの両方式3cycle/token一致/Device backing release、HTTP READY/SUSPENDED/復帰/ERRORの資源観測（既存6alias構成＋pageable構成）、共有auto resumeを検証。Linux CUDA link wrapで起動pin失敗の明示拒否、実Host pin属性、D2H/H2Dが同じstartup pointerを利用、反復中の確保1回/free0回、Suspended終了解放1回、両方式のH2D完了gate/同期失敗ERRORとsnapshot保持を確認。
+- 実モデル測定: ninfer-suspend-real、native /models/Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer、context/KV163840、rk8v4、FP16 GDN、MTP3/optimized proposal head、Vision overlay、HostKV8 GiB/HostState8。現static librariesから同一diagnostic source/flagsでprofileをlinkし、pageable→pinnedの順に別processで各5cycle。text/Vision warmup後、毎resume後のraw token列を対照と完全照合。profiler capture、build/link、他GPU testsとの重複なし。以下は初回を除くcycle 1–4平均、秒（括弧はmin–max）。
+
+| 方式 | suspend全体 | D2H phase | unmap/release | resume全体 | weight restore | backing map | persistent H2D |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| pageable | 2.163（1.939–2.330） | 1.333 | 0.830 | 7.551（7.213–8.098） | 5.505 | 0.880 | 0.915 |
+| pinned | 1.152（1.100–1.180） | 0.360 | 0.791 | 6.931（6.796–7.061） | 5.744 | 0.830 | 0.358 |
+
+- 解釈: この比較ではsuspendが1.011秒（46.8%）短縮。pageableのD2H phaseは毎回のbuffer確保・並列page準備・drain・copyを含み、pinnedは起動時確保後のdrain・copyのみ。pinned suspendのminor faultsは1,154,049→0。resumeは0.620秒短縮、persistent H2Dが0.915→0.358秒。weight restoreは今回変更せず変動もあるため、他条件でも同じ全体改善率を保証しない。
+- 起動・RAM: 初回suspend/resumeはpageable2.577/7.516秒、pinned1.191/6.832秒。Engine初期化全体はpageable20.458秒、pinned24.207秒（差をisolated pin allocation時間とは扱わない）。/proc/self/statusのcurrent RSS平均はSUSPENDED両方式16.299 GiB、READYはpageable11.897 GiB / pinned16.298 GiB。Host snapshot容量4,726,981,888 bytes（4.402 GiB）はpinnedのREADYでも保持する。high-water RSSをcurrent RAM値に代用していない。
+- 正常性: 10/10cycle raw token一致、SUSPENDED known retained Device bytes=0、READY=22,865,248,256 bytes。valid snapshot bytesは停止中4,726,981,888/復帰後0、allocated capacityは復帰後pageable0/pinned4,726,981,888。各weight read=17,901,806,848 bytes、H2D=17,901,792,256 bytesが一致。両process終了後GPU使用量13 MiBへ戻る。snapshot形式・数値演算・weight復帰方式は変更しない。
+- 記録: E:\koji\work\20260813\NInfer\tmp\suspend-acceptance\pinned-snapshot-20261003\report.md / summary.json / pageable.jsonl・log / pinned.jsonl・log / main.cpp / profile / run.sh / analyze.ps1。profile link logは /tmp/ninfer-pinned-profile-build.log。buildと診断の再現補助はrepo .cache/build-pinned.sh、check-pinned.sh、build_suspend_profile.py（commit対象外）。
+- docs: SPEC_SUSPEND.md、README、CLI/serving guide/help、Engine architecture、tests READMEを既定pinnedとlifetime/計測/資源観測に更新。全diffレビュー・git diff --check実施。
+- 未実施: Windows native build/実行、全suite、100cycle/HTTP endurance再実行。pin失敗/gate/pointer/free回数の注入testはLinux専用、製品にはtest hookなし。画像MCP連携は不要、weight RAM保持案は保留。
+- 残作業: この機能の実装・関連検証・実測は完了。この単位をcommitし、追加作業は次の指示待ち。再検証は既存build treeで上記6targetsをbuildし同名CTestを実行、実測は保存済みprofile/run.shを使用。dev/real container、既存build treeとnative model volumeを保持する。

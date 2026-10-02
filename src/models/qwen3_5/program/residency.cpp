@@ -84,9 +84,13 @@ void detail::ProgramImpl::snapshot_persistent() {
     if (!parameters.model.options().enable_model_suspend || !residency_idle()) {
         throw std::logic_error("persistent snapshot requires suspend-enabled idle Program");
     }
-    // No full clear or pinned allocation. Commit pages before D2H; release after successful resume.
-    auto snapshot = std::unique_ptr<std::byte[]>(new std::byte[persistent.capacity()]);
-    prepare_snapshot_pages(snapshot.get(), persistent.capacity());
+    // Keep the startup-sized pinned buffer; pageable mode prepares a temporary buffer per cycle.
+    std::unique_ptr<std::byte[]> snapshot;
+    if (!residency_pinned_snapshot) {
+        snapshot.reset(new std::byte[persistent.capacity()]);
+        prepare_snapshot_pages(snapshot.get(), persistent.capacity());
+    }
+    void* destination = residency_pinned_snapshot ? residency_pinned_snapshot->data() : snapshot.get();
     for (std::size_t rank = 0; rank < compute_streams.size(); ++rank) {
         residency_cuda(cudaStreamSynchronize(compute_streams[rank]), "drain compute stream");
         residency_cuda(cudaStreamSynchronize(transfer_streams[rank]), "drain transfer stream");
@@ -97,13 +101,14 @@ void detail::ProgramImpl::snapshot_persistent() {
     if (hybrid_ && hybrid_->residency_restore_stream()) {
         residency_cuda(cudaStreamSynchronize(hybrid_->residency_restore_stream()), "drain context restore stream");
     }
-    residency_cuda(cudaMemcpy(snapshot.get(), persistent.base(), persistent.capacity(),
+    residency_cuda(cudaMemcpy(destination, persistent.base(), persistent.capacity(),
                               cudaMemcpyDeviceToHost), "snapshot whole persistent arena");
     residency_snapshot = std::move(snapshot);
+    residency_snapshot_valid = true;
 }
 
 void detail::ProgramImpl::detach_storage() {
-    if (!residency_snapshot) { throw std::logic_error("persistent snapshot is missing"); }
+    if (!residency_snapshot_valid) { throw std::logic_error("persistent snapshot is missing"); }
     // Set before the first physical change, including partial detach failures.
     residency_storage_intact = false;
     residency_host_cache_quiescent = false;
@@ -114,7 +119,7 @@ void detail::ProgramImpl::detach_storage() {
 }
 
 Program::StorageRestoreTiming detail::ProgramImpl::restore_storage() {
-    if (!residency_snapshot || residency_storage_intact) {
+    if (!residency_snapshot_valid || residency_storage_intact) {
         throw std::logic_error("Program storage is not suspended");
     }
     using Clock = std::chrono::steady_clock;
@@ -128,7 +133,7 @@ Program::StorageRestoreTiming detail::ProgramImpl::restore_storage() {
     else { persistent.attach_backing(); }
     timing.map_seconds = elapsed(persistent_map_start);
     const auto h2d_start = Clock::now();
-    residency_cuda(cudaMemcpy(persistent.base(), residency_snapshot.get(), persistent.capacity(),
+    residency_cuda(cudaMemcpy(persistent.base(), residency_snapshot_data(), persistent.capacity(),
                               cudaMemcpyHostToDevice), "restore whole persistent arena");
     // Pageable H2D can return once staged, before DMA completes on the default stream.
     // Engine streams are non-blocking: finish and check this copy before publishing READY.
@@ -149,12 +154,19 @@ std::size_t Program::persistent_device_bytes() const noexcept {
 }
 std::size_t Program::workspace_device_bytes() const noexcept { return impl_->workspace_storage.physical_bytes(); }
 std::size_t Program::snapshot_bytes() const noexcept {
-    return impl_->residency_snapshot ? impl_->persistent.capacity() : 0;
+    return impl_->residency_snapshot_valid ? impl_->persistent.capacity() : 0;
 }
+std::size_t Program::snapshot_capacity_bytes() const noexcept {
+    return (impl_->residency_pinned_snapshot || impl_->residency_snapshot) ? impl_->persistent.capacity() : 0;
+}
+bool Program::snapshot_pinned() const noexcept { return impl_->residency_pinned_snapshot.has_value(); }
 void Program::snapshot_persistent() { impl_->snapshot_persistent(); }
 void Program::detach_storage() { impl_->detach_storage(); }
 Program::StorageRestoreTiming Program::restore_storage() { return impl_->restore_storage(); }
-void Program::release_snapshot() noexcept { impl_->residency_snapshot.reset(); }
+void Program::release_snapshot() noexcept {
+    impl_->residency_snapshot_valid = false;
+    impl_->residency_snapshot.reset();
+}
 void Program::residency_error() noexcept {
     impl_->residency_storage_intact = false;
     impl_->residency_host_cache_quiescent = false;

@@ -36,7 +36,8 @@ if(UNIX AND NOT APPLE)
     SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_suspend_restore_completion.cpp"
     LIBRARIES ninfer_engine ninfer_core ninfer::json)
   target_link_options(ninfer_suspend_restore_completion_test PRIVATE
-    -Wl,--wrap=cudaMemcpy -Wl,--wrap=cudaStreamSynchronize)
+    -Wl,--wrap=cudaMemcpy -Wl,--wrap=cudaStreamSynchronize
+    -Wl,--wrap=cudaHostAlloc -Wl,--wrap=cudaFreeHost)
   set_tests_properties(ninfer_suspend_restore_completion_test PROPERTIES SKIP_RETURN_CODE 77)
   target_compile_definitions(ninfer_model_suspend_test PRIVATE NINFER_TEST_WRAP_SAMPLING=1)
   target_link_options(ninfer_model_suspend_test PRIVATE

@@ -32,6 +32,8 @@ Opt-in single-GPU [model suspend/resume](docs/serving.md#explicit-model-suspend-
 releases model backing while retaining CUDA Graphs and virtual addresses. HTTP suspend defaults
 to automatic resume on the next generation request; use `{"auto_resume": false}` to keep the GPU
 available to another process until explicit resume.
+Snapshot storage defaults to a pinned Host buffer allocated at startup and reused until shutdown;
+`--suspend-snapshot-memory pageable` selects temporary ordinary Host storage instead.
 
 Measured in September 2026 on one card each, greedy, one request at a time unless the row says
 otherwise; each number's setup and the full tables are in the

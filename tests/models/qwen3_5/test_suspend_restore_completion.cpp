@@ -22,11 +22,42 @@ struct TransferGate {
     std::shared_future<void> released = release.get_future().share();
 };
 thread_local TransferGate* transfer_gate = nullptr;
+struct PinProbe {
+    std::size_t bytes;
+    bool fail = false;
+    int allocations = 0, frees = 0;
+    void* pointer = nullptr;
+};
+thread_local PinProbe* pin_probe = nullptr;
+}
+extern "C" cudaError_t __real_cudaHostAlloc(void**, std::size_t, unsigned int);
+extern "C" cudaError_t __real_cudaFreeHost(void*);
+extern "C" cudaError_t __wrap_cudaHostAlloc(void** pointer, std::size_t bytes, unsigned int flags) {
+    auto* probe = pin_probe;
+    if (probe && bytes == probe->bytes && std::exchange(probe->fail, false)) {
+        ++probe->allocations;
+        return cudaErrorMemoryAllocation;
+    }
+    const auto status = __real_cudaHostAlloc(pointer, bytes, flags);
+    if (probe && bytes == probe->bytes && status == cudaSuccess) {
+        ++probe->allocations;
+        probe->pointer = *pointer;
+    }
+    return status;
+}
+extern "C" cudaError_t __wrap_cudaFreeHost(void* pointer) {
+    if (pin_probe && pointer == pin_probe->pointer) { ++pin_probe->frees; }
+    return __real_cudaFreeHost(pointer);
 }
 extern "C" cudaError_t __real_cudaMemcpy(void*, const void*, std::size_t, cudaMemcpyKind);
 extern "C" cudaError_t __real_cudaStreamSynchronize(cudaStream_t);
 extern "C" cudaError_t __wrap_cudaMemcpy(void* destination, const void* source,
                                         std::size_t bytes, cudaMemcpyKind kind) {
+    if (pin_probe && bytes == pin_probe->bytes &&
+        ((kind == cudaMemcpyDeviceToHost && destination != pin_probe->pointer) ||
+         (kind == cudaMemcpyHostToDevice && source != pin_probe->pointer))) {
+        return cudaErrorInvalidValue; // The startup allocation must be the actual snapshot buffer.
+    }
     auto* gate = transfer_gate;
     if (!gate || !gate->armed || bytes != gate->bytes || kind != cudaMemcpyHostToDevice) {
         return __real_cudaMemcpy(destination, source, bytes, kind);
@@ -57,12 +88,59 @@ extern "C" cudaError_t __wrap_cudaStreamSynchronize(cudaStream_t stream) {
 }
 
 namespace {
-void check(bool failure) {
+void check_startup_buffer() {
     ninfer::test::qwen_fixture::ModelFixture fixture;
     ninfer::test::qwen_fixture::execution_fixture(fixture);
     EngineOptions options;
     options.artifact_path = fixture.file.entry;
     options.enable_model_suspend = true;
+    options.max_context = 128;
+    options.kv_capacity = KvCapacityPolicy::explicit_capacity(128);
+    options.prefill_chunk = 128;
+    options.context_cache.host_kv_capacity_bytes = 0;
+    options.context_cache.host_state_slots = 0;
+    std::size_t bytes = 0;
+    { Engine engine(options); bytes = engine.residency().persistent_snapshot_capacity_bytes; }
+    require(bytes > 0, "no startup pinned capacity");
+    PinProbe probe{bytes, true};
+    pin_probe = &probe;
+    // Reset the test-only pointer even when an assertion throws.
+    struct Reset { ~Reset() { pin_probe = nullptr; } } reset;
+    bool failed = false;
+    try { Engine engine(options); }
+    catch (const std::runtime_error& error) {
+        failed = std::string(error.what()).find("failed to pin") != std::string::npos;
+    }
+    require(failed && probe.allocations == 1 && !probe.pointer, "startup pin failure silently fell back or published READY");
+    probe.allocations = 0;
+    {
+        Engine engine(options);
+        cudaPointerAttributes attributes{};
+        require(probe.allocations == 1 && probe.pointer &&
+                cudaPointerGetAttributes(&attributes, probe.pointer) == cudaSuccess &&
+                attributes.type == cudaMemoryTypeHost, "snapshot startup storage is not pinned");
+        RequestOptions request;
+        request.execution.requested_output_tokens = 3;
+        request.execution.allow_prefix_reuse = false;
+        const auto baseline = engine.generate(engine.prepare_tokens({65, 66}), request).generated_token_ids;
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            (void)engine.suspend();
+            (void)engine.resume();
+            require(engine.generate(engine.prepare_tokens({65, 66}), request).generated_token_ids == baseline,
+                    "reused pinned buffer changed generation");
+            require(probe.allocations == 1 && probe.frees == 0, "cycle reallocated or freed startup pinned snapshot");
+        }
+        (void)engine.suspend(); // Destruction frees Host storage without implicit resume.
+    }
+    require(probe.frees == 1, "Suspended shutdown leaked pinned snapshot");
+}
+void check(bool failure, SuspendSnapshotMemory memory) {
+    ninfer::test::qwen_fixture::ModelFixture fixture;
+    ninfer::test::qwen_fixture::execution_fixture(fixture);
+    EngineOptions options;
+    options.artifact_path = fixture.file.entry;
+    options.enable_model_suspend = true;
+    options.suspend_snapshot_memory = memory;
     options.max_context = 128;
     options.kv_capacity = KvCapacityPolicy::explicit_capacity(128);
     options.prefill_chunk = 128;
@@ -127,7 +205,10 @@ int main() {
         return 77;
     }
     try {
-        check(false); check(true);
+        check_startup_buffer();
+        for (const auto memory : {SuspendSnapshotMemory::Pinned, SuspendSnapshotMemory::Pageable}) {
+            check(false, memory); check(true, memory);
+        }
         std::cout << "PASS persistent restore completion and asynchronous failure\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

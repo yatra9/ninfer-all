@@ -152,6 +152,7 @@ std::string serve_usage_text(const char* argv0) {
            "                                the interpolation threshold (default: the\n"
            "                                model's native window)\n"
            "  --enable-model-suspend        enable idle suspend/resume (single GPU; HTTP auto-resume default)\n"
+           "  --suspend-snapshot-memory M   pinned|pageable (default: pinned); used with model suspend\n"
            "  --wddm-evictable-budget       Windows D3D12 builds: budget against dedicated\n"
            "                                memory, holding arenas resident\n"
            "\n"
@@ -922,6 +923,11 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 require_value("--rope-scaling-original-context"));
         } else if (arg == "--enable-model-suspend") {
             options.enable_model_suspend = true;
+        } else if (arg == "--suspend-snapshot-memory") {
+            const std::string_view memory = require_value("--suspend-snapshot-memory");
+            if (memory == "pinned") { options.suspend_snapshot_memory = SuspendSnapshotMemory::Pinned; }
+            else if (memory == "pageable") { options.suspend_snapshot_memory = SuspendSnapshotMemory::Pageable; }
+            else { throw std::invalid_argument("suspend-snapshot-memory must be pinned or pageable"); }
         } else if (arg == "--wddm-evictable-budget") {
             options.wddm_evictable_budget = true;
         } else if (arg == "--mlp-a8-decode") {

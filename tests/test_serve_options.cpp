@@ -318,6 +318,23 @@ int main() {
     failures += check(suspend.enable_model_suspend && !defaults.enable_model_suspend &&
                           make_engine_options(suspend).enable_model_suspend,
                       "model suspend flag did not reach Engine options");
+    failures += check(make_engine_options(suspend).suspend_snapshot_memory == ninfer::SuspendSnapshotMemory::Pinned,
+                      "serve suspend snapshot must default to pinned");
+    const auto pageable = parse({"ninfer-serve", "model.ninfer", "--enable-model-suspend",
+                                 "--suspend-snapshot-memory", "pageable"});
+    failures += check(make_engine_options(pageable).suspend_snapshot_memory == ninfer::SuspendSnapshotMemory::Pageable,
+                      "serve pageable snapshot selection did not reach Engine");
+    for (const char* memory : {"pinned", "invalid", ""}) {
+        bool rejected = false;
+        try {
+            if (*memory) {
+                const auto parsed = parse({"ninfer-serve", "model.ninfer", "--suspend-snapshot-memory", memory});
+                failures += check(make_engine_options(parsed).suspend_snapshot_memory == ninfer::SuspendSnapshotMemory::Pinned,
+                                  "serve explicit pinned selection failed");
+            } else { (void)parse({"ninfer-serve", "model.ninfer", "--suspend-snapshot-memory"}); }
+        } catch (const std::invalid_argument&) { rejected = true; }
+        failures += check(rejected == (std::string(memory) != "pinned"), "serve accepted invalid snapshot memory");
+    }
     failures += check(wddm.wddm_evictable_budget && !defaults.wddm_evictable_budget,
                       "--wddm-evictable-budget did not select the WDDM budget");
 

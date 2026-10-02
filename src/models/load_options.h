@@ -13,6 +13,7 @@ struct LoadOptions {
     EnginePurpose purpose          = EnginePurpose::Generation;
     bool vision                    = false;
     bool enable_model_suspend      = false;
+    SuspendSnapshotMemory suspend_snapshot_memory = SuspendSnapshotMemory::Pinned;
     SpeculativeBackend speculative = SpeculativeBackend::None;
     ProposalHead proposal_head     = ProposalHead::Full;
     // Device-memory trades that store a stored Q8 vocabulary matrix (or the MoE MTP layer's routed
@@ -107,6 +108,7 @@ struct LoadOptions {
     return {.purpose        = options.purpose,
             .vision         = options.enable_vision,
             .enable_model_suspend = options.enable_model_suspend,
+            .suspend_snapshot_memory = options.suspend_snapshot_memory,
             .speculative    = options.speculative.backend,
             .proposal_head  = options.speculative.proposal_head,
             .lm_head_q4     = options.lm_head_q4,

@@ -38,7 +38,8 @@ concurrent management/status calls, zero-output submission rejection while suspe
 1000 zero-output submissions racing ten suspend/resume cycles,
 immutable-source failure with retained diagnostics/snapshot, and suspended/error destruction.
 An additional 32768-slot KV fixture checks three restores of a persistent snapshot larger than
-64 MiB, including token equality, device backing release and snapshot RAM release after resume.
+64 MiB in both pinned and pageable modes, including token equality, device backing release,
+startup pinned capacity/reuse and pageable RAM release after resume. Disabled suspend allocates no buffer.
 Hybrid Host-cache persistence is checked across both Ready and Suspended shutdown, followed by
 startup restoration of saved blocks/snapshots and generation comparison. Failed-resume ERROR
 shutdown must not save the cache.
@@ -49,7 +50,9 @@ It is standalone for targeted GPU acceptance without rebuilding the complete tes
 Linux standalone `ninfer_suspend_restore_completion_test` stages the persistent H2D into pinned
 memory and holds its default-stream DMA behind a callback gate. It requires RESUMING and retained
 snapshot until completion, then checks successful generation or an injected synchronization
-failure with ERROR, rejected admission and retained diagnostics/snapshot.
+failure with ERROR, rejected admission and retained diagnostics/snapshot, in both memory modes.
+It also injects a startup pin allocation failure, verifies actual pinned storage, one allocation
+across repeated cycles, and buffer release on Suspended shutdown using test-only CUDA link wrapping.
 `ninfer_suspend_upload_timing_test` covers ordinary, transcode-only and mixed weight restores.
 A bounded delay inside transcode upload must appear in the reported duration; restored bytes and
 transfer counts are also checked. Both use test-only linker wrapping and skip without CUDA/VMM.

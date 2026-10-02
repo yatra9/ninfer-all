@@ -340,6 +340,8 @@ private:
         status.persistent_device_bytes = instance_.program->persistent_device_bytes();
         status.workspace_device_bytes = instance_.program->workspace_device_bytes();
         status.persistent_snapshot_bytes = instance_.program->snapshot_bytes();
+        status.persistent_snapshot_capacity_bytes = instance_.program->snapshot_capacity_bytes();
+        status.persistent_snapshot_pinned = instance_.program->snapshot_pinned();
         status.retained_device_bytes = status.weight_device_bytes + status.persistent_device_bytes +
                                        status.workspace_device_bytes;
     }

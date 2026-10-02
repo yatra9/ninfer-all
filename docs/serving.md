@@ -80,7 +80,7 @@ Repeated suspend while suspended updates `auto_resume` without GPU operations an
 omitting the field resets it to true. Resume while ready returns the current state with HTTP 200.
 
 Suspend releases physical weight, persistent and workspace backing while retaining their virtual
-addresses, CUDA Graphs and CPU metadata. Persistent capacity is copied into ordinary host RAM;
+addresses, CUDA Graphs and CPU metadata. Persistent capacity is copied into host RAM;
 resume uploads weights from the original artifact and restores persistent bytes to the same addresses.
 Keep every artifact part unchanged and accessible until the process exits. Workspace receives fresh
 backing. Model/Program reconstruction does not occur. The public Engine itself remains explicitly
@@ -108,12 +108,21 @@ artifact-read/H2D byte counts and the last operation timings. Device byte counts
 context/driver/graph allocations and VA reservations. VMM map, persistent D2H/H2D and weight upload
 are timed separately; weight restore includes transcode read/conversion/upload and the existing
 overlapped artifact-read/upload pipeline, including transcode-only loads. Persistent H2D completion
-is checked before snapshot release and READY publication; asynchronous completion failures retain
+is checked before snapshot invalidation and READY publication; asynchronous completion failures retain
 the snapshot and publish ERROR.
-Host snapshot capacity adds to the process RAM requirement while suspended.
-Persistent D2H timing includes snapshot allocation, page preparation, stream drain and the copy.
-Host pages are prepared before the copy, using up to four CPU workers for snapshots of at least
-64 MiB. This does not retain snapshot RAM after a successful resume.
+With model suspend enabled, `--suspend-snapshot-memory pinned` is the default. Before READY,
+Program allocates one pinned Host buffer equal to its fixed persistent capacity and retains it
+until shutdown, reusing it for every suspend/resume. Allocation failure aborts startup; it does
+not silently select pageable memory. This RAM is needed while READY as well as while suspended,
+and is separate from the Host prefix cache budget. Disabling model suspend allocates no snapshot buffer.
+Select `--suspend-snapshot-memory pageable` for temporary ordinary Host RAM, allocated per suspend
+and released after successful resume. Its pages are prepared before D2H using up to four CPU
+workers for snapshots of at least 64 MiB. Neither mode clears the entire buffer before copying.
+`persistent_snapshot_bytes` counts valid restore data and is zero after successful resume.
+`persistent_snapshot_capacity_bytes` counts allocated Host storage, including idle pinned storage;
+`persistent_snapshot_pinned` reports whether that storage is pinned. ERROR retains valid snapshots.
+Persistent D2H timing includes stream drain and the copy, plus allocation/page preparation in
+pageable mode. The one-time pinned allocation contributes to startup time instead.
 
 Vision is disabled by default: its weights and Vision-specific unified-workspace extent are not
 allocated, and media requests and token-count requests fail with HTTP 400 `vision_disabled`. Add
@@ -1316,6 +1325,8 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--response-store-max-records N` | maximum locally retained Responses objects | `1024` |
 | `--response-store-max-mib N` | total local Response envelope/Item/context budget | `256` |
 | `--kv-dtype bf16\|int8\|fp8\|rk8v4\|rk4v4\|rk4v4-e8\|nvfp4\|k8v4` | KV-cache storage. `rk8v4` is opt-in RotorQuant, `rk4v4` opt-in Lloyd-Max 4-bit keys and `rk4v4-e8` opt-in E8-lattice INT4 keys; all eight are accepted on this fork's sm_86/sm_89 targets | `bf16` |
+| `--enable-model-suspend` | enable single-GPU idle suspend/resume via the residency API | off |
+| `--suspend-snapshot-memory pinned\|pageable` | with model suspend enabled, retain a startup-sized pinned snapshot buffer or allocate temporary ordinary RAM per suspend | `pinned` |
 | `--spec mtp\|dflash\|dflash2` | speculative backend | off |
 | `--draft-tokens N` | `1..15` for MTP, DFlash and DFlash2 | unset |
 | `--lm-head-draft` | optimized proposal head | off |

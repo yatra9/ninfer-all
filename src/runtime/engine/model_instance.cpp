@@ -30,6 +30,10 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 void validate_suspend_options(const EngineOptions& options) {
+    if (options.suspend_snapshot_memory != SuspendSnapshotMemory::Pinned &&
+        options.suspend_snapshot_memory != SuspendSnapshotMemory::Pageable) {
+        throw std::invalid_argument("invalid suspend snapshot memory mode");
+    }
     if (options.enable_model_suspend &&
         (options.purpose != EnginePurpose::Generation || options.devices.size() > 1 || options.wddm_evictable_budget)) {
         throw std::invalid_argument("model suspend requires single-GPU Generation without the WDDM evictable budget");

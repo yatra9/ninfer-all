@@ -227,11 +227,15 @@ Device payload 的 direct read 最多两路并行，预读限于原有最多四�
 错误时先停止并 join reader，再 drain transfer stream，之后才释放 staging。
 
 启用 suspend 的单 GPU Program 为 persistent 与 workspace 保留固定 VA。空闲时，persistent 的
-完整 capacity 原始字节写入惰性分配的普通 Host RAM；恢复保持 CPU cache/lease 元数据和所有 Graph，
-将完整快照写回原 VA。快照在 D2H 前以 4 KiB 间隔及末尾单字节提交 Host page，不清零整个
+完整 capacity 原始字节写入 Host RAM；恢复保持 CPU cache/lease 元数据和所有 Graph，
+将完整快照写回原 VA。`suspend_snapshot_memory`默认 Pinned：Program 初始化完成前按 persistent capacity
+分配一次 pinned buffer，直到关闭都保留并重复使用。分配失败令启动失败，不隐式 fallback；suspend
+未启用时不分配。Pageable 模式惰性分配普通 Host RAM，在 D2H 前以 4 KiB 间隔及末尾单字节提交 Host page，不清零整个
 buffer。64 MiB 以上用最多四个 CPU worker，较小快照由调用者处理；所有 worker join 后才开始
 D2H。OS 拒绝创建线程时，调用者完成剩余页面；Host 分配异常时先 join 再释放 buffer。
-页面准备包含在 snapshot D2H 时间内，成功恢复后释放快照 RAM。
+Pageable 的页面准备包含在 snapshot D2H 时间内，成功恢复后释放 RAM。Pinned 的分配计入启动时间。
+两种模式只在 D2H 成功后将 snapshot 标记有效；成功恢复后清除此标记，Pinned buffer 仍保留。
+状态报告区分有效 snapshot bytes、已分配 Host capacity 和实际 pinned 标志；ERROR 保留有效 snapshot。
 workspace 使用新的 physical backing，不保存旧内容；scratch 与 Vision bridge
 在使用前写入。检查覆盖 request、context transaction、Vision window、pool loan，以及 compute、transfer、
 Vision 和 hybrid cache 独立 restore stream。detach 开始后，关闭时不执行读取 Device 的 reset 或 disk spill。

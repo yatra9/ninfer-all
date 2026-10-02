@@ -108,21 +108,29 @@ snapshot は model weights のような17 GiB級ではなく、Program persisten
 
 48 GiB RAM 環境を前提に、まず実機で `persistent.capacity()` を計測し、RAM予算内であることを確認する。
 
-v1 は性能より単純性を優先し、snapshot buffer は通常の Host RAM でよい。必要なら後で chunked pinned staging を追加する。
+`--suspend-snapshot-memory pinned|pageable` / `EngineOptions::suspend_snapshot_memory`で方式を選ぶ。
+既定は`pinned`。suspend有効時、Program初期化の完了前に`persistent.capacity()`と同容量の
+pinned Host bufferを一度確保し、READY・SUSPENDED・resume後・ERRORを通してProgram終了まで保持する。
+容量は初期化済みarenaから確定し、手指定や実際のD2Hによる測定は不要。確保失敗は起動失敗とし、
+pageableへ暗黙fallbackしない。suspend無効時にはsnapshot bufferを確保しない。
+READYのbufferは復元用snapshotとして無効。D2H成功後にのみ有効とし、resumeのH2D完了と
+storage復帰成功後に無効化する。復帰失敗時は有効snapshotとbufferを保持する。
 
-D2Hに先立ち4 KiB間隔と末尾の1 byteだけをtouchしてHostページを事前確保する。
+`pageable`は従来の通常Host RAMをsuspendごとにlazy allocateし、resume成功後に解放する。
+この方式のみ、D2Hに先立ち4 KiB間隔と末尾の1 byteだけをtouchしてHostページを事前確保する。
 64 MiB未満はcallerで行い、64 MiB以上はCPU数を上限に最大4 workerへ分割する。
 全workerのjoin後にD2Hへ進む。OSによるthread作成失敗時は残りをcallerで処理し、
 既存workerもjoinする。Host確保例外時も既存workerをjoinしてからbufferを解放する。
-全量ゼロ埋め、全量pinned化、resume成功後のsnapshot用RAM保持は行わない。
-`persistent_snapshot_d2h_seconds`は従来どおりbuffer確保・ページ事前確保・stream drain・D2Hを含む。
+全量ゼロ埋めは行わない。pinned方式はsuspend時の確保・ページ準備を行わない。
+`persistent_snapshot_d2h_seconds`はstream drain・D2Hと、pageable方式のbuffer確保・ページ準備を含む。
+pinned確保は起動時間に含まれ、suspend時間には含まれない。
 
 推奨実装:
 
 ```text
 D2H:
-  allocate ordinary Host snapshot
-  prepare Host pages; join workers
+  pinned: reuse startup Host buffer
+  pageable: allocate Host snapshot; prepare Host pages; join workers
   cudaStreamSynchronize(all relevant streams)
   cudaMemcpy(host_persistent_snapshot,
              persistent.data(),
@@ -137,7 +145,7 @@ H2D:
   cudaStreamSynchronize(nullptr) // pageable H2Dのdefault-stream DMA完了・エラー確認
 ```
 
-snapshot buffer は suspend/resume 機能有効時に lazy allocate してよい。snapshot は `SUSPENDED` の間だけ保持し、resume 成功後は解放してよい。
+resume成功後はsnapshotを無効化する。pageable bufferのみ解放し、pinned bufferは終了時に解放する。
 
 ### 3.5 Workspace
 
@@ -717,7 +725,9 @@ transcode-only経路も計測対象とし、transcodeの読込・変換・H2D完
 
 ### 15.3 Residency status
 
-少なくとも以下を API / logs から確認可能にする。`persistent_snapshot_bytes` は snapshot buffer を保持している間のみ非 0 とし、resume 成功後に buffer を解放した場合は 0 とする。
+少なくとも以下を API / logs から確認可能にする。`persistent_snapshot_bytes`は有効な復元用snapshotのみを数え、
+READY・成功resume後は0とする。`persistent_snapshot_capacity_bytes`は実際のHost buffer確保容量を数え、
+pinned方式ではREADYでも非0。`persistent_snapshot_pinned`はpinned bufferを実際に保持しているかを示す。
 
 ```text
 state
@@ -726,6 +736,8 @@ persistent_device_bytes
 workspace_device_bytes
 retained_device_bytes
 persistent_snapshot_bytes
+persistent_snapshot_capacity_bytes
+persistent_snapshot_pinned
 last_suspend_seconds
 last_resume_seconds
 last_error
@@ -749,7 +761,7 @@ SSD read error / corrupt artifact / H2D error の場合:
 
 same-VA remap または H2D restore に失敗した場合は state = ERROR とする。
 pageable H2Dは呼出しのreturnだけではDMA完了を保証しないため、転送streamの完了同期と
-エラー確認を必須とする。同期成功後にのみsnapshotを解放しREADYを公開する。
+エラー確認を必須とする。同期成功・storage復帰成功後にのみsnapshotを無効化しREADYを公開する。pageable bufferのみ解放し、pinned bufferは保持する。
 
 ### 16.4 VMM remap failure
 
@@ -772,6 +784,7 @@ v1 で必須なのは以下だけでよい。
 
 ```text
 --enable-model-suspend
+--suspend-snapshot-memory pinned|pageable  # default: pinned
 ```
 
 必要なら debug / validation 用に `--suspend-require-vmm` を追加してよい。
@@ -867,7 +880,7 @@ NInfer 本体を変更する前に RTX 3090 上で以下を確認する。
 
 実測で切替が遅い場合のみ行う。
 
-- persistent snapshot の pinned/chunked copy
+- persistent snapshot の方式選択（既定pinned/起動時確保とpageable/lazy確保）、buffer再利用
 - artifact read span optimization
 - larger / tuned pinned staging
 - overlapped SSD read + H2D

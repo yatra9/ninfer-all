@@ -1148,6 +1148,8 @@ public:
     [[nodiscard]] std::size_t persistent_device_bytes() const noexcept;
     [[nodiscard]] std::size_t workspace_device_bytes() const noexcept;
     [[nodiscard]] std::size_t snapshot_bytes() const noexcept;
+    [[nodiscard]] std::size_t snapshot_capacity_bytes() const noexcept;
+    [[nodiscard]] bool snapshot_pinned() const noexcept;
     void snapshot_persistent();
     void detach_storage();
     struct StorageRestoreTiming {

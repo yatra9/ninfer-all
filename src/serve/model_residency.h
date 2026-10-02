@@ -36,6 +36,8 @@ inline nlohmann::json model_residency_report(const std::string& model, const Mod
             {"retained_device_bytes", s.retained_device_bytes}, {"released_device_bytes", s.released_device_bytes},
             {"mapped_device_bytes", s.mapped_device_bytes}, {"restored_device_bytes", s.mapped_device_bytes},
             {"persistent_snapshot_bytes", s.persistent_snapshot_bytes},
+            {"persistent_snapshot_capacity_bytes", s.persistent_snapshot_capacity_bytes},
+            {"persistent_snapshot_pinned", s.persistent_snapshot_pinned},
             {"weight_artifact_read_bytes", s.weight_artifact_read_bytes}, {"weight_h2d_bytes", s.weight_h2d_bytes},
             {"last_suspend_seconds", s.last_suspend_seconds}, {"suspend_total_seconds", s.last_suspend_seconds},
             {"last_resume_seconds", s.last_resume_seconds}, {"resume_total_seconds", s.last_resume_seconds},

@@ -126,6 +126,9 @@ void check_hybrid_shutdown(const ModelFixture& fixture) {
 }
 void run() {
     EngineOptions unsupported;
+    unsupported.suspend_snapshot_memory = static_cast<SuspendSnapshotMemory>(255);
+    rejects<std::invalid_argument>([&] { (void)runtime::normalize_engine_options(unsupported); }, "invalid snapshot mode accepted");
+    unsupported.suspend_snapshot_memory = SuspendSnapshotMemory::Pinned;
     unsupported.enable_model_suspend = true;
     unsupported.purpose = EnginePurpose::CausalScoring;
     rejects<std::invalid_argument>([&] { (void)runtime::normalize_engine_options(unsupported); }, "scoring suspend accepted");
@@ -140,6 +143,8 @@ void run() {
     {
         Engine disabled(options(fixture, false));
         require(!disabled.residency().enabled, "suspend must be opt-in");
+        require(disabled.residency().persistent_snapshot_capacity_bytes == 0 &&
+                !disabled.residency().persistent_snapshot_pinned, "disabled suspend allocated snapshot storage");
         expect_residency_error(disabled, ModelResidencyErrorKind::Unsupported);
     }
     {
@@ -278,12 +283,19 @@ void run() {
     const auto original_position_capacity = position_capacity;
     position_capacity = 32768;
     fixture.file.write();
-    {
+    for (const auto memory : {SuspendSnapshotMemory::Pinned, SuspendSnapshotMemory::Pageable}) {
         auto configured = options(fixture, true);
+        configured.suspend_snapshot_memory = memory;
         configured.max_context = 32768;
         configured.kv_capacity = KvCapacityPolicy::explicit_capacity(32768);
         Engine engine(configured);
         const auto ready_bytes = engine.residency().retained_device_bytes;
+        const bool pinned = memory == SuspendSnapshotMemory::Pinned;
+        const auto snapshot_capacity = engine.memory_summary().sequence.capacity_bytes;
+        require(engine.residency().persistent_snapshot_bytes == 0 &&
+                engine.residency().persistent_snapshot_pinned == pinned &&
+                engine.residency().persistent_snapshot_capacity_bytes == (pinned ? snapshot_capacity : 0),
+                "startup snapshot allocation disagrees with selected mode");
         RequestOptions request;
         request.execution.requested_output_tokens = 3;
         request.execution.allow_prefix_reuse = false;
@@ -292,10 +304,13 @@ void run() {
             const auto suspended = engine.suspend();
             require(suspended.state == ModelResidencyState::Suspended &&
                     suspended.persistent_snapshot_bytes >= 64ULL * 1024 * 1024 &&
+                    suspended.persistent_snapshot_capacity_bytes == snapshot_capacity &&
                     suspended.retained_device_bytes == 0, "large snapshot did not release device backing");
             const auto resumed = engine.resume();
             require(resumed.state == ModelResidencyState::Ready && resumed.persistent_snapshot_bytes == 0 &&
                     resumed.retained_device_bytes == ready_bytes, "large snapshot restore retained RAM or lost backing");
+            require(resumed.persistent_snapshot_capacity_bytes == (pinned ? snapshot_capacity : 0) &&
+                    resumed.persistent_snapshot_pinned == pinned, "resume lost pinned buffer or retained pageable storage");
             require(engine.generate(engine.prepare_tokens({65, 66}), request).generated_token_ids == baseline &&
                     baseline.size() == 3, "large snapshot restore changed generation");
         }
