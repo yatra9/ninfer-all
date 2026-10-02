@@ -22,10 +22,11 @@
   Pythonテストは実行していない。Windows nativeでのbuild/runは未検証。
 - 合意済み: suspendはidle時のみ。既存のVision overlayも対応対象とし、対応を別機能として切り離さない。
 - 合意済み（2026-10-02）: 実機検証はWSLC上のLinuxを優先する。P0 PoCと実モデル受入はこの環境から進める。
-- 現在の作業: P4は02e2be4dにcommit済み。P5 HTTP・CLI flag・サービス受付gate・timing細分化を実装し、対象buildと4関連テストが成功。P5 checkpoint commit後はP6の指定Qwen3.8-27B/MTP3/Vision overlay実機受入へ進む。新開発imageは ninfer-suspend:dev（FROM ninfer-all:build）、コンテナ ninfer-suspend-dev。既存BuildKit cacheを /build へ取り込んだ差分buildを使用する。正確なbuild pathと再開手順は末尾の最新検証欄参照。
+- 現在の作業: P4は02e2be4dにcommit済み。P5 HTTP・CLI flag・サービス受付gate・timing細分化を実装し、対象buildと4関連テストが成功。P5は8e3cdd7cにcommit済み。P6の指定Qwen3.8-27B/MTP3/Vision overlay実機受入を進めている。新開発imageは ninfer-suspend:dev（FROM ninfer-all:build）、コンテナ ninfer-suspend-dev。既存BuildKit cacheを /build へ取り込んだ差分buildを使用する。正確なbuild pathと再開手順は末尾の最新検証欄参照。
   P0の各arena正確容量・physical量とproduction workspace監査は継続中。予備実測用の
   旧 `ninfer-suspend-budget` コンテナ（host port 18082）はユーザーのディスク整理で削除済み。
 - 各実装段階の完了時に、本節へ変更内容、実施した検証、未検証事項、次の作業を記録する。
+- 未チェック項目は省略・不要と判断した項目ではなく、完了に必須の残作業。P0のarena所有権・workspace依存監査と容量/RAM実測、P3のcontinuation/Vision overlay復帰は未完了である。P4/P5接続を先に進めたのは実Program受入の入口を作るためであり、P0/P3の出口条件を免除したものではない。P6実機受入でこれらの証拠を揃えるまで、NInfer suspend全体を完了と扱わず、画像MCP実装へ進まない。
 - 2026-10-02に実装開始と作業単位ごとのcommitを承認済み。AGENTS.mdのsuspend checkpoint規約に従い、
   検証済み単位をcommitして問題がなければ次段階へ継続する。
 
@@ -357,3 +358,25 @@ VMM map時間を3領域のcreate/map/accessから計測し、persistent H2Dとwe
 WSLC CUDA13.1/GCC13/RTX3090で -j8 targeted build成功: ninfer、ninfer-serve、ninfer_model_suspend_test、ninfer_model_residency_http_test、ninfer_cli_options_test、ninfer_serve_options_test。共通types.hの追加変更はなく、CUDA演算の長時間再compileは発生していない。CTest CLI options PASS 0.00秒、serve options PASS 0.97秒、Engine GPU PASS 14.83秒。最終HTTP GPU test PASS 2.78秒（認証401、slash alias、未知model404、body400、zero-output応答予約のBusy409、suspended管理/診断/health、5推論入口503、明示resume後の3token HTTP生成、idempotency、source変更ERROR/500/診断snapshot保持）。テストfixtureのmessage不足とlogger header不足は修正済み。全diffレビューとgit diff --check成功。全suite/Windows nativeは未実行。コンテナsourceに.gitを同期していないため製品build idはunknownという既存生成警告があるが、機能buildは成功している。
 
 次はP5 commit後にP6実機受入。コンテナninfer-suspend-devにbuild成果物があり、build directoryは /build/57382beee819500f31a1c6917b3f94a49d4c1f45c1915ebd70acfb6b0d97d4e3、P5 buildログ /tmp/ninfer-suspend-p5-build.log。実モデルhost path C:\AI\ninfer-rtx3090-windows-x64-0.11.0-rtx3090\models\huihui-Qwen3.8-27B-abliterated-NInfer-v3\Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer を存在確認（20,437,521,664 bytes）。既存build containerはこのmodels bindを持たないため、成果物をE:のworkspaceへ取り出し、指定model directoryをread-only mountした別acceptance containerで実行する方針（artifactをC:へ複製しない）。GPU空きを確認して、context/KV163840、rk8v4、MTP3、draft head、FP16 GDN、Vision overlay、merged16384、concurrency1、HostKV8GiB/State8で20GiB解放・48GiB RAM・continuation/Graph/overlay/100cycleを検証する。P0 workspace/arena外allocation監査、P3 continuation/Vision再実行の出口条件と故障検証はまだ残る。NInfer単体受入後にのみqwen-image-runtime実装へ進む。
+
+### P6: モデルのWSLCネイティブ配置と初回受入（2026-10-02）
+
+ユーザー指示によりモデル配置をWindows bind mountからWSLCネイティブのnamed volume `ninfer-suspend-models`へ変更した。元の明示モデルdirectoryから全4ファイルをcp -aでコピーし、volume上で `sha256sum -c SHA256SUMS` がモデルとconversion JSONの両方でOK。元ファイルは保持。前節の「artifactをC:へ複製しない」はこの新しい指示により更新され、約20.4GBのコピーをWSLCが管理するLinux filesystemへ置いている。
+
+受入containerは `ninfer-suspend-acceptance`、image `ninfer-suspend:dev`、host port18082。モデルは `-v ninfer-suspend-models:/models:ro`、artifact `/models/Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer`。結果・server binary・Graph interposerは `E:\koji\work\20260813\NInfer\tmp\suspend-acceptance:/acceptance`。設定はcontext/KV163840、rk8v4、MTP3、draft head、FP16 GDN、Vision overlay、merged16384、concurrency1、HostKV8GiB/State8を維持。開発container ninfer-suspend-devとbuild成果物は保持した。
+
+追加した tools/suspend-dev/acceptance.py は直接HTTPでstored Responsesの継続生成、suspendedの推論503、実VRAM、snapshot/restore/statusを検証する。graph-trace.cpp は受入専用LD_PRELOADで実CUDA Graph capture/instantiate/launch/destroyを観測する。製品APIや実装へ診断機能は追加していない。WSLC Python3.12.3、CUDA13.1/GCC13/RTX3090でinterposerのcompileと実モデル1cycle実行が成功。継続出力とoutput token数が対照と一致し、capture18/instantiate10/destroy0を維持した既存GraphExecへのlaunchを確認した。これは文字列出力とtoken数の一致であり、raw token vectorの直接比較はまだ残る。
+
+Windows bindでの初回trace計測はsuspend5.54秒、resume15.39秒、weight restore13.64秒、試験iteration21.62秒。native配置の初回はsuspend3.400秒、resume7.671秒、weight restore6.057秒、persistent D2H2.562秒/H2D0.511秒、VMM map0.866秒、試験iteration11.591秒。単発比較であり、suspend時間の差を保存場所の効果とは断定しない。モデルは依然artifactから復元し、全weight RAM mirrorは追加していない。
+
+physical backingはweight17,918,066,688 bytes、persistent4,756,340,736 bytes、workspace218,103,808 bytes、合計22,892,511,232 bytes（21.3203GiB）。snapshot logical bytesは4,754,642,176。suspendedで3領域のretained bytesは0、GPU空き23993MiB、継続生成のcached tokens41を確認した。Windows側初回process VmHWMは17.16GiB、swap0（これはprocessの測定であり全host RAM予算の結論ではない）。
+
+旧100cycle試験は14回成功後、配置変更のためユーザー指示に沿ってクライアントだけSIGINTで停止し、serverがREADYへ戻ったことを確認してから停止・再作成した。partial reportとログは /acceptance/windows-bind-100-cycle-report.json、windows-bind-server.log、windows-bind-graph-trace.logとして保持。KeyboardInterruptは意図的中断であり製品故障ではない。
+
+nativeの1cycle結果は /acceptance/native-one-cycle-report.json。native100回試験を次のコマンドで開始済み（exec session40645）。再開時はまず `wslc exec ninfer-suspend-acceptance pgrep -af acceptance.py` と /acceptance/100-cycle-report.json のcomplete/error/cyclesを確認し、稼働中なら重複起動しない。長い試験の進捗は約5分間隔で確認する。
+
+    wslc exec ninfer-suspend-acceptance python3 /acceptance/acceptance.py --cycles 100 --trace /acceptance/graph-trace.log --report /acceptance/100-cycle-report.json
+
+P6とNInfer全体は未完了。次は100cycle結果と各cycleのcontinuation/cache/Graph/VRAM/RAMを確認し、P0のproduction ownership/workspace監査、P3の実Vision overlay KV loan/weight fallback再実行、production workspace poison、raw token一致、残る故障検証を進める。P0/P3の未チェック項目は免除しない。画像MCPはNInfer受入完了後。
+
+この受入tool/configuration単位のcheck: interposer実compile/run、native1cycle PASS、WSLC Python3.12.3 py_compile PASS、git diff --check PASS。READMEへnative volume配置・Graph trace・直接HTTP試験手順と検証範囲を記載し、全対象diffを確認した。native100cycleはこのcheckpoint時点で稼働中であり、完了チェックは付けない。
