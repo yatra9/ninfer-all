@@ -22,19 +22,19 @@ struct Listener {
     explicit Listener(HttpServer& owner) : server(owner), worker([&owner] { (void)owner.listen(); }) {}
     ~Listener() { server.stop(); worker.join(); }
 };
-void run() {
+void run(bool enabled, const std::string& alias) {
     ninfer::test::qwen_fixture::ModelFixture fixture;
     ninfer::test::qwen_fixture::execution_fixture(fixture);
     ServeOptions options;
     options.artifact_path = fixture.file.entry;
-    options.enable_model_suspend = true;
+    options.enable_model_suspend = enabled;
     options.max_context = 128;
     options.kv_capacity = KvCapacityPolicy::explicit_capacity(128);
     options.prefill_chunk = 128;
     options.context_cache.host_kv_capacity_bytes = 0;
     options.context_cache.host_state_slots = 0;
     options.api_key = "test-key";
-    options.model_id_override = "deployment/alias";
+    options.model_id_override = alias;
     options.log_stats_interval_ms = 0;
     options.enable_webui = false;
     GenerationService service(options);
@@ -48,10 +48,11 @@ void run() {
     client.set_connection_timeout(5);
     client.set_read_timeout(30);
     const httplib::Headers auth = {{"Authorization", "Bearer test-key"}};
-    const std::string base = "/v1/models/deployment/alias";
+    const std::string base = "/v1/models/" + alias;
     const auto get = [&](const std::string& path, int status) {
         auto response = client.Get(path, auth);
-        require(response && response->status == status, "unexpected GET status for " + path);
+        require(response && response->status == status, "unexpected GET status for " + path +
+                (response ? ": " + std::to_string(response->status) + " " + response->body : ": no response"));
         return Json::parse(response->body);
     };
     const auto post = [&](const std::string& path, const std::string& body, int status) {
@@ -62,9 +63,26 @@ void run() {
     };
     auto unauthenticated = client.Post(base + "/suspend", "{}", "application/json");
     require(unauthenticated && unauthenticated->status == 401, "management bypassed auth");
-    require(get(base, 200)["id"] == "deployment/alias", "management shadowed model detail");
-    require(get(base + "/residency", 200)["state"] == "ready", "missing ready status");
+    const auto detail = get(base, 200);
+    require(detail["object"] == "model" && detail["id"] == alias, "management shadowed model detail");
+    const auto ready = get(base + "/residency", 200);
+    require(ready["object"] == "model.residency" && ready["model"] == alias &&
+            ready["state"] == "ready" && ready["enabled"] == enabled, "wrong alias residency status");
+    require(get("/v1/models", 200)["data"][0]["id"] == alias, "model list lost public alias");
+    get("/v1/models/unknown/residency", 404);
     post("/v1/models/unknown/suspend", "{}", 404);
+    auto generation_body = Json::parse(
+        R"({"messages":[{"role":"user","content":"hello"}],"max_tokens":3,"temperature":0,"ignore_eos":true})");
+    generation_body["model"] = alias;
+    if (!enabled) {
+        for (const auto* operation : {"/suspend", "/resume"}) {
+            require(post(base + operation, "{}", 400)["error"]["code"] == "model_suspend_disabled",
+                    "disabled management did not preserve opt-in contract");
+        }
+        require(post("/v1/chat/completions", generation_body.dump(), 200)["usage"]["completion_tokens"] == 3,
+                "disabled suspend broke alias generation");
+        return;
+    }
     for (const auto* body : {"", "{", "[]", "null", "{\"memory_class\":\"weights\"}"}) {
         post(base + "/suspend", body, 400);
     }
@@ -100,8 +118,7 @@ void run() {
             resumed["weight_h2d_bytes"].get<std::uint64_t>() > 0, "incomplete HTTP resume");
     post(base + "/resume", "{}", 200);
     get("/health", 200);
-    const auto generation = post("/v1/chat/completions",
-        R"({"model":"deployment/alias","messages":[{"role":"user","content":"hello"}],"max_tokens":3,"temperature":0,"ignore_eos":true})", 200);
+    const auto generation = post("/v1/chat/completions", generation_body.dump(), 200);
     require(generation["usage"]["completion_tokens"] == 3, "HTTP generation did not recover after resume");
     post(base + "/suspend", "{}", 200);
     const auto timestamp = std::filesystem::last_write_time(fixture.file.entry);
@@ -121,6 +138,12 @@ int main() {
         cuDeviceGetAttribute(&vmm, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, 0) != CUDA_SUCCESS || !vmm) {
         return 77;
     }
-    try { run(); std::cout << "PASS residency HTTP\n"; return 0; }
+    try {
+        for (const auto* alias : {"deployment/alias", "deployment/residency", "deployment/residency/residency"}) {
+            for (const bool enabled : {true, false}) { run(enabled, alias); }
+        }
+        std::cout << "PASS residency HTTP aliases with suspend enabled/disabled\n";
+        return 0;
+    }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

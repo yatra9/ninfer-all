@@ -544,7 +544,9 @@ void HttpServer::register_routes() {
         handle_models(req, res);
     });
     server_.Get(R"(/v1/models/(.+)/residency)", [this](const httplib::Request& req, httplib::Response& res) {
-        handle_model_residency(req, res, "residency");
+        // A public alias can itself end in /residency. Its exact URL remains model detail.
+        if (req.path == "/v1/models/" + public_model_id_) { handle_model(req, res); }
+        else { handle_model_residency(req, res, "residency"); }
     });
     server_.Post(R"(/v1/models/(.+)/suspend)", [this](const httplib::Request& req, httplib::Response& res) {
         handle_model_residency(req, res, "suspend");
@@ -756,7 +758,9 @@ void HttpServer::handle_models(const httplib::Request&, httplib::Response& res) 
 }
 
 void HttpServer::handle_model(const httplib::Request& req, httplib::Response& res) const {
-    const std::string id = req.matches.size() > 1 ? req.matches[1].str() : std::string();
+    // Both the model-detail and residency regexes may dispatch here; their captures differ.
+    constexpr std::string_view prefix = "/v1/models/";
+    const std::string id = req.path.substr(prefix.size());
     if (id != public_model_id_) {
         ApiError error;
         error.status  = 404;

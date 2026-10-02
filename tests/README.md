@@ -55,6 +55,9 @@ transfer counts are also checked. Both use test-only linker wrapping and skip wi
 to check authentication, public aliases, management body validation, service response reservations,
 suspended inference rejection, explicit/idempotent resume and ERROR diagnostics. The CLI and
 serve option tests are standalone too, so these checks can build independently of the full bundle.
+The HTTP cases run with suspend enabled and disabled for ordinary slash aliases and aliases ending
+in one or two `/residency` segments; model detail, status, model list and generation must retain the
+exact public alias without route collisions.
 `ninfer_qwen3_5_suspend_real_test` is a standalone opt-in real-artifact acceptance executable:
 pass an explicit artifact, PNG and KV capacity. It checks exact text and Vision token vectors
 over three fresh-backing resumes, forces actual overlay execution, and reports KV versus weight

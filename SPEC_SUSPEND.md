@@ -517,6 +517,9 @@ v1 request body:
 
 管理POSTのbodyは空JSON objectのみ許可する。空body、array、null、未知fieldは400。
 管理routeは既存API-key認証と公開model alias（`--model-id`を含む）を使用し、未知modelは404。
+公開aliasはslashや末尾`/residency`を含められる。`GET /v1/models/{alias}`の完全一致は
+常に既存model detailを返し、状態照会はそのURLへさらに`/residency`を追加する。
+この区別はsuspend有効・無効の双方で維持する。
 flag未指定のsuspend/resumeは400 `model_suspend_disabled`、residency照会はenabled=falseを返す。
 
 成功:

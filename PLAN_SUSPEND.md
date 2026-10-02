@@ -467,3 +467,13 @@ Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages
 - SPEC_SUSPEND.md、serving、Engine architecture、tests READMEへ正常Suspended保存とERROR除外を反映。全差分レビュー・git diff --checkを実施。
 - 未実施: Windows native、全suite、実モデル100cycleの再実行。今回の保存は既存Hybrid保存形式を使用し、数値演算・weight upload・snapshot復元形式は変更しない。画像MCP連携は対象外。
 - 次の具体的作業: もう1件の監査指摘、model-idがdeployment/residencyの場合に既存GET model detailが管理用GETと衝突する不具合を修正する。完全一致のモデル詳細と管理suffixを識別し、suspend有効/無効の双方でHTTP回帰テストを追加する。このHybrid修正単位をcommitしてから開始する。
+
+### 再監査修正: /residency末尾aliasのHTTPルート競合（2026-10-02）
+
+- 指摘: GET /v1/models/(.+)/residencyが既存model detailより先に一致し、--model-id deployment/residencyのdetail URLをmodel deploymentの状態照会として処理して404にしていた。suspend無効時にもrouteは登録されるため影響する。
+- 修正: residency GET route内で公開aliasのdetail URL完全一致を優先してmodel detailへdispatchする。detail handlerは異なるregex captureに依存せず、既知prefixを除いたrequest pathからidを取得する。管理statusは完全なaliasの後に/residencyを追加する既存契約を維持する。POST、認証、未知aliasの404は維持する。
+- 回帰テスト: ninfer_model_residency_http_testを deployment/alias、deployment/residency、deployment/residency/residency × suspend有効/無効の6構成へ拡張。各構成でdetail object/id、status object/model/enabled、model list、未知model404、認証を確認。有効時は既存Busy/入力検証/生成拒否/resume/生成/ERROR診断も実行。無効時はsuspend/resumeの400 model_suspend_disabledと通常生成成功を確認する。
+- SPEC_SUSPEND.md、servingのModels説明、tests READMEへaliasの完全一致と状態URLの区別を反映。全差分レビュー・git diff --checkを実施。
+- 検証環境: 既存ninfer-suspend-dev / WSLC Linux / RTX3090 / CUDA13.1 / GCC13。prepare-build.sh後、ninfer-serveとHTTP testの-j8増分build/link成功。同名CTestの6構成すべてPASS（16.68秒）。build logは /tmp/ninfer-residency-alias-fix-build.log。
+- 未実施: Windows native、全suite、実モデル100cycleの再実行。画像MCP連携は対象外。Hybrid修正のEngine/completion/upload/旧HTTPのPASSは直前のcheckpointに記載済みであり、このHTTP修正はGPU実行・復元処理を変更しない。
+- 残作業: HTTPの6構成PASSを確認済み。この修正単位をcommitし、今回の監査2指摘への対応を完了する。追加の実装作業はない。再検証にはninfer_model_suspend_testとninfer_model_residency_http_testをbuildして同名CTestを実行する。既存container/build tree/native model volumeは保持する。

@@ -469,6 +469,10 @@ effective `max_model_len` (the `--max-context` ceiling, also as `context_window`
 
 `GET /v1/models/{id}` returns the same object for the single configured alias and a `404` for any
 other id.
+Aliases may include slashes or end in `/residency`. With `--model-id deployment/residency`,
+`GET /v1/models/deployment/residency` returns model detail, while
+`GET /v1/models/deployment/residency/residency` returns residency status. This also applies when
+suspend is disabled; the status then reports `enabled: false`.
 
 ## OpenAI Chat Completions
 
