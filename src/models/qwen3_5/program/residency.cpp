@@ -2,6 +2,7 @@
 #include "core/evictable_kv_pool.h"
 
 #include <cuda_runtime.h>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 
@@ -74,17 +75,29 @@ void detail::ProgramImpl::detach_storage() {
     workspace_storage.detach_backing();
 }
 
-void detail::ProgramImpl::restore_storage() {
+Program::StorageRestoreTiming detail::ProgramImpl::restore_storage() {
     if (!residency_snapshot || residency_storage_intact) {
         throw std::logic_error("Program storage is not suspended");
     }
+    using Clock = std::chrono::steady_clock;
+    const auto elapsed = [](Clock::time_point start) {
+        return std::chrono::duration<double>(Clock::now() - start).count();
+    };
+    Program::StorageRestoreTiming timing;
+    const auto persistent_map_start = Clock::now();
     if (kv_arena) { kv_arena->attach_backing(); }
     else { persistent.attach_backing(); }
+    timing.map_seconds = elapsed(persistent_map_start);
+    const auto h2d_start = Clock::now();
     residency_cuda(cudaMemcpy(persistent.base(), residency_snapshot.get(), persistent.capacity(),
                               cudaMemcpyHostToDevice), "restore whole persistent arena");
+    timing.h2d_seconds = elapsed(h2d_start);
+    const auto workspace_map_start = Clock::now();
     workspace_storage.attach_backing();
+    timing.map_seconds += elapsed(workspace_map_start);
     // Scratch and Vision bridge are written before use; no arena clear or graph reconstruction.
     residency_storage_intact = true;
+    return timing;
 }
 
 bool Program::residency_idle() const { return impl_->residency_idle(); }
@@ -98,7 +111,7 @@ std::size_t Program::snapshot_bytes() const noexcept {
 }
 void Program::snapshot_persistent() { impl_->snapshot_persistent(); }
 void Program::detach_storage() { impl_->detach_storage(); }
-void Program::restore_storage() { impl_->restore_storage(); }
+Program::StorageRestoreTiming Program::restore_storage() { return impl_->restore_storage(); }
 void Program::release_snapshot() noexcept { impl_->residency_snapshot.reset(); }
 void Program::residency_error() noexcept { impl_->residency_storage_intact = false; }
 } // namespace ninfer::models::qwen3_5

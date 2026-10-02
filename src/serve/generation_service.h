@@ -149,6 +149,10 @@ public:
     [[nodiscard]] ninfer::RuntimeStats runtime_stats() const { return engine_->runtime_stats(); }
 
     [[nodiscard]] bool is_available() const { return engine_->is_available(); }
+    [[nodiscard]] ModelResidencyStatus residency() const { return engine_->residency(); }
+    [[nodiscard]] ModelResidencyStatus suspend() { return change_residency(true); }
+    [[nodiscard]] ModelResidencyStatus resume() { return change_residency(false); }
+    void require_available() const;
 
     // Requests currently holding ingress capacity (max_concurrency + max_pending_requests).
     [[nodiscard]] std::size_t admitted_requests() const;
@@ -178,6 +182,7 @@ public:
     void warmup();
 
 private:
+    ModelResidencyStatus change_residency(bool suspend_requested);
     enum class CacheParticipation : std::uint8_t {
         Disabled,
         ReadWrite,

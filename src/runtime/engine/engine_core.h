@@ -405,14 +405,13 @@ private:
                 status.state = ModelResidencyState::Suspended;
             } else {
                 physical_change_started = true;
-                const auto restore_start = Clock::now();
                 const auto weights = instance_.restore_weights(device_);
-                status.weight_restore_seconds = elapsed(restore_start);
+                status.weight_restore_seconds = weights.upload_seconds;
                 status.weight_artifact_read_bytes = weights.read_bytes;
                 status.weight_h2d_bytes = weights.h2d_bytes;
-                const auto persistent_start = Clock::now();
-                instance_.program->restore_storage();
-                status.persistent_snapshot_h2d_seconds = elapsed(persistent_start);
+                const auto storage = instance_.program->restore_storage();
+                status.persistent_snapshot_h2d_seconds = storage.h2d_seconds;
+                status.vmm_map_seconds = weights.backing_map_seconds + storage.map_seconds;
                 instance_.program->release_snapshot();
                 refresh_residency_bytes(status);
                 status.mapped_device_bytes = status.retained_device_bytes;

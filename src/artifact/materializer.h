@@ -85,6 +85,7 @@ struct MaterializationStats {
     std::size_t pinned_object_count     = 0;
     std::size_t host_object_count       = 0;
     double upload_seconds               = 0;
+    double backing_map_seconds          = 0; // restore only; excluded from upload_seconds
 };
 
 class MaterializedArtifact {

@@ -804,7 +804,7 @@ public:
     [[nodiscard]] bool residency_idle() const;
     void snapshot_persistent();
     void detach_storage();
-    void restore_storage();
+    Program::StorageRestoreTiming restore_storage();
     // Pipeline stages only: scratch for the ranks past the primary device, each allocated in its
     // own card's memory. `work` borrows a slice of each and switches between them as the layer
     // loop walks stages, so every existing workspace call site keeps using one arena object.

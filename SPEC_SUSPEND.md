@@ -513,6 +513,10 @@ v1 request body:
 
 初期版では caller に memory class を選ばせない。
 
+管理POSTのbodyは空JSON objectのみ許可する。空body、array、null、未知fieldは400。
+管理routeは既存API-key認証と公開model alias（`--model-id`を含む）を使用し、未知modelは404。
+flag未指定のsuspend/resumeは400 `model_suspend_disabled`、residency照会はenabled=falseを返す。
+
 成功:
 
 ```json
@@ -649,6 +653,11 @@ HTTP request thread 上で内部 state transition を開始する場合でも、
 ---
 
 ## 15. Memory accounting / observability
+
+VMM map時間はweight/persistent/workspaceの新規backing create/map/accessのみを合算する。
+persistent H2D時間は全capacityの同期raw copyのみ。weight restore時間はmapを除く既存の
+artifact read・transcode・staging・H2D pipeline全体で、読込と転送bytesをそれぞれ報告する。
+readとH2Dはoverlapするため、weight restoreを単純なread時間とcopy時間の和として扱わない。
 
 以下を計測する。
 

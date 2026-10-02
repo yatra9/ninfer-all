@@ -314,6 +314,10 @@ int main() {
         failures += check(rejected, "an invalid or missing YaRN factor was accepted");
     }
     const ServeOptions wddm = parse({"ninfer-serve", "model.ninfer", "--wddm-evictable-budget"});
+    const ServeOptions suspend = parse({"ninfer-serve", "model.ninfer", "--enable-model-suspend"});
+    failures += check(suspend.enable_model_suspend && !defaults.enable_model_suspend &&
+                          make_engine_options(suspend).enable_model_suspend,
+                      "model suspend flag did not reach Engine options");
     failures += check(wddm.wddm_evictable_budget && !defaults.wddm_evictable_budget,
                       "--wddm-evictable-budget did not select the WDDM budget");
 
@@ -1032,6 +1036,7 @@ int main() {
                                         "--vision-residency",
                                         "--vram-headroom-mib",
                                         "--wddm-evictable-budget",
+                                        "--enable-model-suspend",
                                         "--webui-mcp-proxy"}) {
         const std::string message = "serve help omits " + std::string(flag);
         failures += check(serve_help.find(flag) != std::string::npos, message.c_str());

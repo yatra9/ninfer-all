@@ -134,6 +134,8 @@ private:
     [[nodiscard]] LoadSample load_sample() const;
     void handle_models(const httplib::Request& req, httplib::Response& res) const;
     void handle_model(const httplib::Request& req, httplib::Response& res) const;
+    void handle_model_residency(const httplib::Request& req, httplib::Response& res,
+                                std::string_view operation) const;
 
     void record_request_start(const RequestLogContext& context);
     void record_request_rejected(const RequestRejectionLogContext& context);

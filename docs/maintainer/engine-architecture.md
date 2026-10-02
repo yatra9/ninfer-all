@@ -235,6 +235,11 @@ outstanding reservation、pending 或 Program 忙时立即失败，不取消或�
 状态查询只读已发布的 CPU snapshot。非 READY 状态拒绝 submit（包括零输出立即完成），worker 不启动
 Device 操作。shutdown 与 residency 操作串行，失败后保持 ERROR、诊断与 snapshot，禁止隐式 resume。
 
+GenerationService 在同一短 capacity lock 下协调 admission reservation 与管理操作入口，
+因此尚在 media acquisition、token counting 或 response lifetime 的请求也返回 Busy。
+capacity lock 不跨 snapshot/upload 持有；它不拥有第二套模型状态。HTTP 认证后、解析/获取 media
+及开启 SSE 前检查 Engine availability；最终 service admission 与 Engine submit 仍再次检查。
+
 权重、State/KV backing、block-table matrices、workspace 与 CUDA Graph resources 在 Engine 开始接受请求前
 建立。运行期改变 ownership、mapping、frontier 与 replica placement，但不重建这些大块 Device allocations。
 

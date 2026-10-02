@@ -34,6 +34,10 @@ opt-in/disabled handling, active and queued request rejection, repeated fresh-ba
 concurrent management/status calls, zero-output submission rejection while suspended,
 immutable-source failure with retained diagnostics/snapshot, and suspended/error destruction.
 It is standalone for targeted GPU acceptance without rebuilding the complete test bundle.
+`ninfer_model_residency_http_test` uses the same generated artifact with a real HTTP listener
+to check authentication, public aliases, management body validation, service response reservations,
+suspended inference rejection, explicit/idempotent resume and ERROR diagnostics. The CLI and
+serve option tests are standalone too, so these checks can build independently of the full bundle.
 `CMakeLists.txt` includes explicit registrations from `cmake/`, `artifact/`, `models/qwen3_5/`
 and `ops/`. Registration helpers live in `cmake/NinferTests.cmake`; included manifests keep
 executables and CTest working directories under `build/tests/`.

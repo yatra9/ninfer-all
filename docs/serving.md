@@ -57,6 +57,42 @@ When `--model-id` is omitted, the server advertises and accepts the artifact's `
 falling back to its architecture name when no name is stored. An explicit `--model-id` is a public
 HTTP alias override and does not select or alter model execution.
 
+## Explicit model suspend and resume
+
+Start with `--enable-model-suspend` to enable idle model residency management. This opt-in
+requires CUDA VMM and single-GPU Generation; the WDDM evictable budget cannot be combined with it.
+Without the flag, management operations return HTTP 400 `model_suspend_disabled`.
+
+Use the configured public model alias, including any `--model-id` override:
+
+```bash
+curl -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8080/v1/models/qwen3.8-27b/suspend
+curl http://127.0.0.1:8080/v1/models/qwen3.8-27b/residency
+curl -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8080/v1/models/qwen3.8-27b/resume
+```
+
+These routes use the normal API-key authentication. POST requires an empty JSON object.
+Suspend immediately returns 409 `model_busy` while requests, media preparation, response
+reservations, context transfers or residency operations are active; it never cancels them.
+Repeated suspend while suspended and resume while ready return the current state with HTTP 200.
+
+Suspend releases physical weight, persistent and workspace backing while retaining their virtual
+addresses, CUDA Graphs and CPU metadata. Persistent capacity is copied into ordinary host RAM;
+resume uploads weights from the original artifact and restores persistent bytes to the same addresses.
+Keep every artifact part unchanged and accessible until the process exits. Workspace receives fresh
+backing. Model/Program reconstruction and implicit resume do not occur.
+
+Inference endpoints return HTTP 503 before SSE starts while the model is suspending, suspended,
+resuming or in error. `/health` reports 503 when unavailable. Model listing, residency status and
+diagnostics remain available. A fatal residency failure returns 500 for management operations and
+retains `last_error` and the persistent snapshot until process shutdown; restart the process to recover.
+
+The residency JSON reports state, enabled flag, known NInfer backing bytes, snapshot bytes,
+artifact-read/H2D byte counts and the last operation timings. Device byte counts exclude CUDA
+context/driver/graph allocations and VA reservations. VMM map, persistent D2H/H2D and weight upload
+are timed separately; weight restore includes the existing overlapped artifact-read/upload pipeline.
+Host snapshot capacity adds to the process RAM requirement while suspended.
+
 Vision is disabled by default: its weights and Vision-specific unified-workspace extent are not
 allocated, and media requests and token-count requests fail with HTTP 400 `vision_disabled`. Add
 `--vision` when the server must accept image or video input. Speculative residency is likewise
@@ -242,7 +278,7 @@ this adds a CPU synchronization point and mask transfers per round. No speedup c
 
 | Method and path | Behavior |
 |---|---|
-| `GET /health` | process health |
+| `GET /health` | inference availability; 503 during loading or non-ready residency |
 | `GET /v1/load` | serving capacity, current load, and monotonic token counters (see [Load](#load)) |
 | `GET /metrics` | Prometheus text with llama.cpp's `--metrics` series plus NInfer's (see [Metrics](#metrics)) |
 | `GET /stats` | the `/v1/load` snapshot plus the ingress peak and every Engine counter since startup (see [Stats](#stats)) |
@@ -251,6 +287,8 @@ this adds a CPU synchronization point and mask transfers per round. No speedup c
 | `GET /v1` | endpoint index for the announced API base: the model alias and this table |
 | `GET /v1/models` | configured OpenAI model alias, effective `max_model_len` (also as `context_window`), whether it accepts images, and a llama.cpp-compatible `meta` object (see [Models](#models)) |
 | `GET /v1/models/{id}` | lookup of the configured alias with the same fields |
+| `GET /v1/models/{id}/residency` | CPU snapshot of model residency and last operation metrics |
+| `POST /v1/models/{id}/suspend`, `POST /v1/models/{id}/resume` | explicit idle residency management; body `{}`, requires `--enable-model-suspend` |
 | `POST /v1/chat/completions` | OpenAI-style chat generation |
 | `POST /v1/responses` | OpenAI Responses Core generation, state, typed Items, and SSE |
 | `POST /v1/responses/input_tokens` | Responses prompt-token count without generation |

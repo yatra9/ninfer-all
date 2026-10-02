@@ -22,7 +22,7 @@
   Pythonテストは実行していない。Windows nativeでのbuild/runは未検証。
 - 合意済み: suspendはidle時のみ。既存のVision overlayも対応対象とし、対応を別機能として切り離さない。
 - 合意済み（2026-10-02）: 実機検証はWSLC上のLinuxを優先する。P0 PoCと実モデル受入はこの環境から進める。
-- 現在の作業: P4 Engine state/public APIのbuildとGPU behavior testが成功し、checkpoint commitを作成する。次はP5 HTTP・起動オプション・サービス受付gate・timing細分化。新開発imageは ninfer-suspend:dev（FROM ninfer-all:build）、コンテナ ninfer-suspend-dev。既存BuildKit cacheを /build へ取り込んだ差分buildを使用する。正確なbuild pathと再開手順は末尾の最新検証欄参照。
+- 現在の作業: P4は02e2be4dにcommit済み。P5 HTTP・CLI flag・サービス受付gate・timing細分化を実装し、対象buildと4関連テストが成功。P5 checkpoint commit後はP6の指定Qwen3.8-27B/MTP3/Vision overlay実機受入へ進む。新開発imageは ninfer-suspend:dev（FROM ninfer-all:build）、コンテナ ninfer-suspend-dev。既存BuildKit cacheを /build へ取り込んだ差分buildを使用する。正確なbuild pathと再開手順は末尾の最新検証欄参照。
   P0の各arena正確容量・physical量とproduction workspace監査は継続中。予備実測用の
   旧 `ninfer-suspend-budget` コンテナ（host port 18082）はユーザーのディスク整理で削除済み。
 - 各実装段階の完了時に、本節へ変更内容、実施した検証、未検証事項、次の作業を記録する。
@@ -207,14 +207,14 @@ P4作業中（2026-10-02）: EngineCoreへ唯一のresidency state、admission�
 
 ### P5: HTTP、起動option、計測
 
-- [ ] `--enable-model-suspend` とhelp/options testを追加する。
-- [ ] POST `/v1/models/{model}/suspend`、POST `/resume`、GET `/residency` を追加する。
+- [x] `--enable-model-suspend` とhelp/options testを追加する。
+- [x] POST `/v1/models/{model}/suspend`、POST `/resume`、GET `/residency` を追加する。
   model alias、認証、body検証、例外変換は既存serverの規約へ合わせる。
-- [ ] SPEC §13のidempotencyを実装する。遷移中は409、ERRORの管理操作は500。
-- [ ] Chat Completions、Responses、Anthropic Messages等の推論入口を503へ統一する。
+- [x] SPEC §13のidempotencyを実装する。遷移中は409、ERRORの管理操作は500。
+- [x] Chat Completions、Responses、Anthropic Messages等の推論入口を503へ統一する。
   SSE開始前に拒否し、background requestを含む受付済み要求の存在もidle判定へ接続する。
-- [ ] 管理APIと診断APIはSUSPENDED中も使用可能にし、health/readinessの意味を既存契約と整合させる。
-- [ ] SPEC §15のbytes・時間・last_errorを公開する。読込、H2D、snapshot、map/unmap、totalを区別する。
+- [x] 管理APIと診断APIはSUSPENDED中も使用可能にし、health/readinessの意味を既存契約と整合させる。
+- [x] SPEC §15のbytes・時間・last_errorを公開する。読込、H2D、snapshot、map/unmap、totalを区別する。
   statusは一貫したCPU snapshotから返し、unmapped device memoryを読み取らない。
 
 出口条件: HTTP schema/状態遷移テストが通り、resumeを明示的に呼ぶまで推論を再開しないこと。
@@ -347,3 +347,13 @@ P4実装はtyped public APIとEngineCore state/admission排他として完了。
 ### build終了確認: test target依存不足で停止（2026-10-02）
 
 ユーザー再呼出しで確認したところNinjaは終了、ログ末尾は subcommand failed。失敗箇所は tests/models/qwen3_5/test_model_suspend.cpp のcompileのみで、runtime/engine/model_instance.h から core/device.h をincludeした際に cuda_runtime.h が見つからない。test targetの LIBRARIES は ninfer_engine ninfer::json のみで、内部Coreヘッダーを使う既存testが指定する ninfer_core が不足している。修正案は tests/models/qwen3_5/tests.cmake の ninfer_model_suspend_test の LIBRARIES へ ninfer_core を追加すること。CUDA/headerの問題はtest依存設定であり、production実装のcompile errorではない。GPUは13 MiB使用で空きあり。GPU behavior testはまだ未実行、P4は未commit。ユーザーの問題時停止指示に従い修正・再build前に確認待ち。既存の完了済みCUDA objectを保持して、承認後にprepare-build.shで差分同期・configure、build-test.shで残りのcompile/link、CTestを実行する。
+
+### P5 checkpoint検証完了とP6への再開地点（2026-10-02）
+
+CLI/serveの --enable-model-suspend をEngineへ伝搬し、認証付きPOST suspend/resumeとGET residencyを公開した。model aliasはslashを含む明示aliasにも対応し、既存model detail routeと競合しない。POSTは{}のみ、未知model404、disabled400、Busy409、ERROR管理500。GenerationServiceのcapacity reservationと管理入口を同じ短lockで調整し、media準備・token count・応答保持もBusy対象にした。I/O中にcapacity lockは保持しない。認証後のpre-route gateと最終admissionにより非READY推論は503となり、SSE/media取得/zero-outputへ迂回しない。背景実行は既存Responses契約で非対応のまま。診断/statusは利用でき、healthはavailabilityに従い503。EngineCoreが唯一のモデルstate所有者である点は維持した。
+
+VMM map時間を3領域のcreate/map/accessから計測し、persistent H2Dとweight upload pipelineから分離した。weight read/H2D bytesは既存materializerのactual counts。読込・転送pipelineはoverlapするためweight_restore_secondsはmapを除くpipeline全体と定義しSPEC/docsへ記載した。docs/serving.md、docs/cli.md、engine architecture、tests READMEを更新した。
+
+WSLC CUDA13.1/GCC13/RTX3090で -j8 targeted build成功: ninfer、ninfer-serve、ninfer_model_suspend_test、ninfer_model_residency_http_test、ninfer_cli_options_test、ninfer_serve_options_test。共通types.hの追加変更はなく、CUDA演算の長時間再compileは発生していない。CTest CLI options PASS 0.00秒、serve options PASS 0.97秒、Engine GPU PASS 14.83秒。最終HTTP GPU test PASS 2.78秒（認証401、slash alias、未知model404、body400、zero-output応答予約のBusy409、suspended管理/診断/health、5推論入口503、明示resume後の3token HTTP生成、idempotency、source変更ERROR/500/診断snapshot保持）。テストfixtureのmessage不足とlogger header不足は修正済み。全diffレビューとgit diff --check成功。全suite/Windows nativeは未実行。コンテナsourceに.gitを同期していないため製品build idはunknownという既存生成警告があるが、機能buildは成功している。
+
+次はP5 commit後にP6実機受入。コンテナninfer-suspend-devにbuild成果物があり、build directoryは /build/57382beee819500f31a1c6917b3f94a49d4c1f45c1915ebd70acfb6b0d97d4e3、P5 buildログ /tmp/ninfer-suspend-p5-build.log。実モデルhost path C:\AI\ninfer-rtx3090-windows-x64-0.11.0-rtx3090\models\huihui-Qwen3.8-27B-abliterated-NInfer-v3\Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer を存在確認（20,437,521,664 bytes）。既存build containerはこのmodels bindを持たないため、成果物をE:のworkspaceへ取り出し、指定model directoryをread-only mountした別acceptance containerで実行する方針（artifactをC:へ複製しない）。GPU空きを確認して、context/KV163840、rk8v4、MTP3、draft head、FP16 GDN、Vision overlay、merged16384、concurrency1、HostKV8GiB/State8で20GiB解放・48GiB RAM・continuation/Graph/overlay/100cycleを検証する。P0 workspace/arena外allocation監査、P3 continuation/Vision再実行の出口条件と故障検証はまだ残る。NInfer単体受入後にのみqwen-image-runtime実装へ進む。

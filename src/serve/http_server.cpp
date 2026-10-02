@@ -4,6 +4,7 @@
 #include "serve/anthropic_messages.h"
 #include "serve/http_transport.h"
 #include "serve/mcp_proxy.h"
+#include "serve/model_residency.h"
 #include "serve/openai_common.h"
 #include "serve/request_log.h"
 #include "serve/webui.h"
@@ -382,6 +383,15 @@ void HttpServer::stop_stats_reporter() {
 httplib::Server::HandlerResponse HttpServer::pre_route(const httplib::Request& req,
                                                        httplib::Response& res) const {
     ensure_openai_request_id(req, res);
+    const auto inference_gate = [&] {
+        if (req.method == "POST" &&
+            (req.path == "/v1/chat/completions" || req.path == "/v1/responses" ||
+             req.path == "/v1/responses/input_tokens" || req.path == "/v1/responses/compact" ||
+             req.path == "/v1/messages" || req.path == "/v1/messages/count_tokens")) {
+            service_->require_available();
+        }
+        return httplib::Server::HandlerResponse::Unhandled;
+    };
     if (!ready_.load(std::memory_order_acquire)) {
         // Runs for every route, including /health and OPTIONS, so a caller cannot tell "not
         // ready" apart from "unauthenticated" -- and skips the API-key check below, since a
@@ -407,7 +417,7 @@ httplib::Server::HandlerResponse HttpServer::pre_route(const httplib::Request& r
     if (options_.api_key.empty() || req.path == "/health" || req.method == "OPTIONS" ||
         (options_.webui_mcp_proxy && req.path == kMcpProxyPath) ||
         (webui_enabled() && req.method == "GET" && !is_api_path(req.path))) {
-        return httplib::Server::HandlerResponse::Unhandled;
+        return inference_gate();
     }
     // Accept both the OpenAI-style bearer token and the Anthropic-style
     // x-api-key header so OpenAI clients and Claude Code (ANTHROPIC_API_KEY
@@ -429,7 +439,7 @@ httplib::Server::HandlerResponse HttpServer::pre_route(const httplib::Request& r
         }
         return httplib::Server::HandlerResponse::Handled;
     }
-    return httplib::Server::HandlerResponse::Unhandled;
+    return inference_gate();
 }
 
 void HttpServer::register_routes() {
@@ -532,6 +542,15 @@ void HttpServer::register_routes() {
     }
     server_.Get("/v1/models", [this](const httplib::Request& req, httplib::Response& res) {
         handle_models(req, res);
+    });
+    server_.Get(R"(/v1/models/(.+)/residency)", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_model_residency(req, res, "residency");
+    });
+    server_.Post(R"(/v1/models/(.+)/suspend)", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_model_residency(req, res, "suspend");
+    });
+    server_.Post(R"(/v1/models/(.+)/resume)", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_model_residency(req, res, "resume");
     });
     server_.Get(R"(/v1/models/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
         handle_model(req, res);
@@ -751,6 +770,34 @@ void HttpServer::handle_model(const httplib::Request& req, httplib::Response& re
                                       options_.enable_vision,
                                       model_metadata_),
                     "application/json");
+}
+
+void HttpServer::handle_model_residency(const httplib::Request& req, httplib::Response& res,
+                                       std::string_view operation) const {
+    const auto model = req.matches[1].str();
+    if (model != public_model_id_) {
+        ApiError error;
+        error.status = 404; error.code = "model_not_found";
+        error.message = "model '" + model + "' not found";
+        throw ApiException(std::move(error));
+    }
+    if (operation != "residency") {
+        const auto body = nlohmann::json::parse(req.body, nullptr, false);
+        if (body.is_discarded() || !body.is_object() || !body.empty()) {
+            ApiError error;
+            error.code = "invalid_request_body";
+            error.message = "model residency request body must be an empty JSON object";
+            throw ApiException(std::move(error));
+        }
+    }
+    try {
+        const auto status = operation == "suspend" ? service_->suspend()
+                            : operation == "resume" ? service_->resume() : service_->residency();
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(model_residency_report(public_model_id_, status).dump(), "application/json");
+    } catch (const ModelResidencyError& error) {
+        throw ApiException(residency_error_to_api_error(error));
+    }
 }
 
 bool HttpServer::bind() {

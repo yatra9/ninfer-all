@@ -344,11 +344,15 @@ void MaterializedArtifact::detach_backing() {
 MaterializationStats MaterializedArtifact::restore_backing(DeviceContext& device) {
     if (!restore_plan_) { throw ArtifactError("weight suspend is not enabled"); }
     restore_reader_->verify_source_unchanged();
+    const auto map_start = std::chrono::steady_clock::now();
     if (pool_) { pool_->attach_backing(); }
     else if (arenas_[0]) { arenas_[0]->attach_backing(); }
+    const auto map_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - map_start).count();
     const std::array<DeviceSpan, 1> destinations{
         arenas_[0] ? DeviceSpan{arenas_[0]->base(), arenas_[0]->capacity()} : DeviceSpan{}};
-    return upload_device_materialization(*restore_reader_, *restore_plan_, destinations, device);
+    auto restored = upload_device_materialization(*restore_reader_, *restore_plan_, destinations, device);
+    restored.backing_map_seconds = map_seconds;
+    return restored;
 }
 
 MaterializationStats upload_device_materialization(
