@@ -324,6 +324,16 @@ public:
     [[nodiscard]] ModelResidencyStatus suspend() { return change_residency(true); }
     [[nodiscard]] ModelResidencyStatus resume() { return change_residency(false); }
 
+    template<class Accept>
+    auto accept_immediate_submission(Accept&& accept) {
+        // Linearize CPU-only submissions with transition publication, just like submit().
+        std::lock_guard lock(queue_mutex_);
+        if (stopping_ || failed_ || residency_status_.state != ModelResidencyState::Ready) {
+            throw RequestError(RequestErrorKind::Unavailable, "inference engine is unavailable");
+        }
+        return std::forward<Accept>(accept)();
+    }
+
 private:
     void refresh_residency_bytes(ModelResidencyStatus& status) const {
         status.weight_device_bytes = instance_.weight_device_bytes();

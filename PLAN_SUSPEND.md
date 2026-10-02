@@ -22,11 +22,11 @@
   Pythonテストは実行していない。Windows nativeでのbuild/runは未検証。
 - 合意済み: suspendはidle時のみ。既存のVision overlayも対応対象とし、対応を別機能として切り離さない。
 - 合意済み（2026-10-02）: 実機検証はWSLC上のLinuxを優先する。P0 PoCと実モデル受入はこの環境から進める。
-- 現在の作業: P4は02e2be4dにcommit済み。P5 HTTP・CLI flag・サービス受付gate・timing細分化を実装し、対象buildと4関連テストが成功。P5は8e3cdd7cにcommit済み。P6の指定Qwen3.8-27B/MTP3/Vision overlay単体受入は完了。P0/P3の残項目も下記証拠で完了した。次は画像MCPの実装・直接テスト、その後P6の連携受入。新開発imageは ninfer-suspend:dev（FROM ninfer-all:build）、コンテナ ninfer-suspend-dev。既存BuildKit cacheを /build へ取り込んだ差分buildを使用する。正確なbuild pathと再開手順は末尾の最新検証欄参照。
+- 現在の作業: P4は02e2be4dにcommit済み。P5 HTTP・CLI flag・サービス受付gate・timing細分化を実装し、対象buildと4関連テストが成功。P5は8e3cdd7cにcommit済み。P6の指定Qwen3.8-27B/MTP3/Vision overlay単体受入は完了。P0/P3の残項目も下記証拠で完了した。画像MCP連携は最新ユーザー指示により対象外。監査指摘2件の修正・回帰検証も完了（末尾参照）。新開発imageは ninfer-suspend:dev（FROM ninfer-all:build）、コンテナ ninfer-suspend-dev。既存BuildKit cacheを /build へ取り込んだ差分buildを使用する。正確なbuild pathと再開手順は末尾の最新検証欄参照。
   P0の各arena容量・physical量とproduction workspace監査は完了（末尾のP6結果参照）。予備実測用の
   旧 `ninfer-suspend-budget` コンテナ（host port 18082）はユーザーのディスク整理で削除済み。
 - 各実装段階の完了時に、本節へ変更内容、実施した検証、未検証事項、次の作業を記録する。
-- 未チェック項目は省略・不要と判断した項目ではなく、完了に必須の残作業。P0のarena所有権・workspace依存監査と容量/RAM実測、P3のcontinuation/Vision overlay復帰はP6単体受入で完了した。P4/P5接続を先に進めたのは実Program受入の入口を作るためであり、P0/P3の出口条件を免除したものではない。これらの証拠が揃ったためNInfer単体の完了を確定し、画像MCP実装へ進める。最後のMCP連携項目は画像MCP実装後に実施する。
+- 未チェック項目は省略・不要と判断した項目ではなく、完了に必須の残作業。P0のarena所有権・workspace依存監査と容量/RAM実測、P3のcontinuation/Vision overlay復帰はP6単体受入で完了した。P4/P5接続を先に進めたのは実Program受入の入口を作るためであり、P0/P3の出口条件を免除したものではない。これらの証拠が揃ったためNInfer単体の完了を確定し、画像MCP実装へ進める。画像MCP連携項目は最新ユーザー指示により完了条件から除外する。
 - 2026-10-02に実装開始と作業単位ごとのcommitを承認済み。AGENTS.mdのsuspend checkpoint規約に従い、
   検証済み単位をcommitして問題がなければ次段階へ継続する。
 
@@ -223,9 +223,9 @@ P4作業中（2026-10-02）: EngineCoreへ唯一のresidency state、admission�
 ### P6: 実機受入とドキュメント
 
 - [x] 下記検証表を実施し、利用した環境・設定・測定値・未実施項目を本書へ記録する。
-- [ ] `docs/serving.md`、`docs/cli.md`、`docs/maintainer/engine-architecture.md`、関連するmemory/overlay説明を更新する。
-- [ ] MCPサーバーの直接呼び出しで、suspend → 画像生成 → 画像生成側のGPU解放 → resume → 画像評価を確認する。
-  ユーザー指示（2026-10-02）により、NInferの実装・単体受入後に別リポジトリ E:\koji\work\20260813\qwen-image-runtime\qwen-image-runtime のSPEC/PLANに従って画像MCPを実装し、その後直接MCP呼出しによる連携受入を行う。汎用model managerは実装しない。OpenCode等のハーネス経由の検証は後日別途判断する。
+- [x] `docs/serving.md`、`docs/cli.md`、`docs/maintainer/engine-architecture.md`、関連するmemory/overlay説明を更新する。
+- 対象外: 画像MCPとの連携検証（2026-10-02の最新ユーザー指示）。
+  ユーザー指示（2026-10-02）により、NInferの実装・単体受入後に別リポジトリ E:\koji\work\20260813\qwen-image-runtime\qwen-image-runtime のSPEC/PLANに従って画像MCPを実装し、連携受入を予定していたが、最新ユーザー指示によりNInfer完了条件から除外した。汎用model managerは実装しない。OpenCode等のハーネス経由の検証は後日別途判断する。
 
 ## 5. 検証と受入基準
 
@@ -417,8 +417,20 @@ Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages
 
 実モデルのone-shot注入はhost/d2h/h2d/unmap/release/access全6ケースPASS。Host確保失敗はbacking/snapshotを変えずREADY、生成一致とsuspend再試行成功。D2H失敗はbackingを解放せずERROR。H2D/access失敗はsnapshotを保持してERROR、推論拒否。workspace unmap失敗はpersistentを先に解放したpartial状態、pool release失敗はunmap後handle残存状態を実際に通し、どちらもERROR/snapshot/診断保持、正常destructor終了。Coreのcreate/map/access途中cleanupはP1 GPU testで検証済み。artifact read/immutable-source failureはP2/P4/P5で検証済み。永久的なCUDA context喪失の実機注入は行っていない。
 
-追加試験中、Windows Win32_OperatingSystemを約2秒間隔で106sample取得。total49,674,076KiB（47.37GiB）、最低free6,309,560KiB（6.02GiB）、観測最大使用41.36GiB。OS/既存IDE・agent等を含む実ホスト値であり、process RSSだけで予算を判定していない。WSLC guest MemTotal24,285,784KiB（23.16GiB）。HostKV8GiB/State8とoverlay pinned Vision295,719,424 bytes、window capacity1,107,296,256 bytes、whole snapshotを含めNInfer単体が安定した。これはsampled peakであり瞬間的peakの厳密上限ではない。OpenCodeハーネスと画像runtime同時常駐はこの単体試験に含めず、ユーザー指示どおりMCP実装後の直接連携・後日のハーネス検証へ残す。
+追加試験中、Windows Win32_OperatingSystemを約2秒間隔で106sample取得。total49,674,076KiB（47.37GiB）、最低free6,309,560KiB（6.02GiB）、観測最大使用41.36GiB。OS/既存IDE・agent等を含む実ホスト値であり、process RSSだけで予算を判定していない。WSLC guest MemTotal24,285,784KiB（23.16GiB）。HostKV8GiB/State8とoverlay pinned Vision295,719,424 bytes、window capacity1,107,296,256 bytes、whole snapshotを含めNInfer単体が安定した。これはsampled peakであり瞬間的peakの厳密上限ではない。OpenCodeハーネスと画像runtime同時常駐はこの単体試験に含めず、今回のNInfer完了条件には含めない。
 
 関連実装とdocsのdiffレビュー、git diff --check、追加C++ target/link、probe g++ build、gpu-borrow nvcc buildが成功。明示model/imageありの実GPU試験が上記PASS。引数なしCTestは意図したskip77（0.62秒）でありGPU PASSの代用にはしていない。P4/P5のfixture/options/HTTP checksは既にPASSし、その後製品実装は変更していない。全suite/Windows native、未用意DFlash/DFlash2 artifact、Hybrid cache、resident/cpu Visionの実モデル組合せは未実施。通常none backendはP4の生成fixtureで確認済み。今回の実モデル受入対象は指定single-GPU/C1/MTP3/overlay。
 
-次の作業はqwen-image-runtimeのPhase0 baseline build/Generate/Edit、その後同repo SPEC/PLANに沿うMCP実装・直接テスト。NInfer standalone受入は完了し、P0/P3残項目も完了。P6の最後のMCP連携は画像MCP実装後に行うため未チェックを維持する。ninfer-suspend-acceptanceは停止済みで100cycle結果を保持、ninfer-suspend-realはsleep infinityで現在GPUモデルなし、ninfer-suspend-devの差分build成果物も保持。必要時 wslc start ninfer-suspend-acceptance で同じnative volume構成のHTTP serverを再開できる。生ログはE:\koji\work\20260813\NInfer\tmp\suspend-acceptance、repoにbinary/model/logはcommitしない。
+この受入時点では画像MCP実装を次に予定していた。最新の再開地点は末尾の監査修正欄を参照。NInfer standalone受入は完了し、P0/P3残項目も完了。画像MCP連携は最新ユーザー指示により対象外。ninfer-suspend-acceptanceは停止済みで100cycle結果を保持、ninfer-suspend-realはsleep infinityで現在GPUモデルなし、ninfer-suspend-devの差分build成果物も保持。必要時 wslc start ninfer-suspend-acceptance で同じnative volume構成のHTTP serverを再開できる。生ログはE:\koji\work\20260813\NInfer\tmp\suspend-acceptance、repoにbinary/model/logはcommitしない。
+
+### 監査指摘修正（2026-10-02）
+
+- Weight/KV両poolのattach_backingで、複数pieceの途中のcreate/map/access失敗時に、そのattachで作成したmapping/handleを即時rollbackする。unmap失敗はmappingとhandleを保持、release失敗はhandleを保持し、他pieceのcleanupは継続する。poisoned/ERROR契約は維持し、保持資源のみdestructorで再試行する。
+- CPU-onlyゼロ出力submissionの最終READY確認とhandle作成をEngineCoreのqueue lock内で行い、suspend/resumeのstate publicationと同じ受付境界へ接続した。自動resumeやGPU実行は追加しない。
+- Linux専用standalone ninfer_suspend_pool_failure_testを追加。両poolとも正常same-VA再attachを確認した後、第2pieceのcreate/map/access失敗 × cleanup成功/unmap失敗/release失敗の18ケースを実CUDA driverとlinker wrapで検証する。即時解放、保持資源の正確なaccounting、destructor後のmapping/handle残存0を確認。
+- ninfer_model_suspend_testに1000件のゼロ出力submitと10回のsuspend/resumeの並行試験、各SUSPENDED境界での受付拒否を追加した。実行順によりREADYで受付済みのhandleは遷移後にwait可能（GPU資源は使用しない）。
+- SPECの受付・partial-map cleanup契約、serving説明、tests READMEを更新。P6 docsは既に実装済みのため完了チェックを補正。最新ユーザー指示に従い、画像MCP連携検証をNInfer完了条件から除外した（未実施をPASSとは扱わない）。
+- 検証環境: 既存ninfer-suspend-dev、WSLC Linux、RTX3090、CUDA13.1/GCC13。prepare-build.sh後、-j8でninfer、ninfer-serve、ninfer_model_suspend_test、ninfer_model_residency_http_test、ninfer_suspend_pool_failure_testの差分build/link成功。build logは /tmp/ninfer-suspend-audit-fix-build.log。
+- チェック: pool failure 18ケースPASS（最終0.33秒）、Engine受付競合/通常生成/遷移/障害/破棄PASS（最終18.43秒）、HTTP管理API PASS（2.82秒）。全差分（新規testを含む）レビュー、git diff --check実施。
+- 未実施: 全suite、Windows native、100cycle実モデルの再実行。既存100cycle報告は保存済みであり今回再実行した結果ではない。Coreの旧2テストは共有ninfer_testsがこの開発treeに未生成のため監査時にNot Run、新規standaloneで両poolの正常attachと失敗cleanupを検証した。今回の修正は数値演算・snapshot形式・正常upload経路を変更しない。
+- 残作業: このNInfer監査修正の範囲ではなし。画像MCPは別作業。既存開発container/build treeと受入モデルvolumeは保持し、必要なら末尾記載のbuild pathと各standalone CTest名で再検証できる。

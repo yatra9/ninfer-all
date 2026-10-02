@@ -41,6 +41,16 @@ ninfer_add_test(ninfer_suspend_backing_test
   LIBRARIES ninfer_core)
 set_tests_properties(ninfer_suspend_backing_test PROPERTIES SKIP_RETURN_CODE 77)
 
+if(UNIX AND NOT APPLE)
+  ninfer_add_test(ninfer_suspend_pool_failure_test STANDALONE
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_suspend_pool_failure.cpp"
+    LIBRARIES ninfer_core CUDA::cuda_driver)
+  target_link_options(ninfer_suspend_pool_failure_test PRIVATE
+    -Wl,--wrap=cuMemCreate -Wl,--wrap=cuMemMap -Wl,--wrap=cuMemSetAccess
+    -Wl,--wrap=cuMemUnmap -Wl,--wrap=cuMemRelease)
+  set_tests_properties(ninfer_suspend_pool_failure_test PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 ninfer_add_test(ninfer_evictable_kv_pool_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_evictable_kv_pool.cu"
   LIBRARIES ninfer_core CUDA::cuda_driver)

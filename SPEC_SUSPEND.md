@@ -409,6 +409,7 @@ ERROR
 ### 8.1 READY
 
 通常 inference を受け付ける。
+ゼロ出力のCPU-only submissionもEngineCoreのqueue lockの下でREADY確認と受付を一体化し、residency遷移と同じadmission境界を使用する。
 
 ### 8.2 SUSPENDING
 
@@ -717,7 +718,7 @@ same-VA remap または H2D restore に失敗した場合は state = ERROR と�
 
 ### 16.4 VMM remap failure
 
-partial map 状態を安全に cleanup し、state = ERROR とする。
+partial map 状態を安全に cleanup し、state = ERROR とする。poolの複数pieceの途中でcreate/map/accessに失敗した場合、成功済みのmapping/handleを即時rollbackする。cleanup自体に失敗した資源のみ所有権情報を保持し、destructorで再試行する。
 
 ### 16.5 Graph replay validation failure
 
@@ -917,8 +918,7 @@ v1 では、複数モデル管理、自動切替、resource class 指定 API、L
 画像MCPは別リポジトリ `qwen-image-runtime` の
 [SPEC_QWEN_IMAGE_RUNTIME.md](../../qwen-image-runtime/qwen-image-runtime/SPEC_QWEN_IMAGE_RUNTIME.md) と
 [PLAN_QWEN_IMAGE_RUNTIME.md](../../qwen-image-runtime/qwen-image-runtime/PLAN_QWEN_IMAGE_RUNTIME.md)
-に従って実装する。ユーザー指示により、NInferの実装・単体受入、画像MCPの実装・直接テスト、
-両者の連携受入の順で進める。OpenCode等のハーネスからの呼出しは後日別途検討する。
+に従う別作業である。2026-10-02の最新ユーザー指示により、画像MCPとの連携検証はNInfer suspendの完了条件から除外する。
 
 初期実装の Done 条件は以下。
 
@@ -937,6 +937,6 @@ v1 では、複数モデル管理、自動切替、resource class 指定 API、L
 - [x] suspended 中 inference が 503
 - [x] busy suspend が 409
 - [x] suspend/resume の繰り返し試験で leak / corruption がない
-- [ ] MCPサーバーを直接呼び出し、suspend -> image generation -> image GPU release -> Qwen resume -> image evaluation を確認する（OpenCode等ハーネス経由の検証は後日別途判断）
+- 対象外: 画像MCPとの連携検証（最新ユーザー指示）。
 
-NInfer単体項目は2026-10-02にWSLC/RTX3090の指定160K/MTP3/Vision overlay構成で受入済み。容量・RAM・100cycle・raw token・Graph・overlay両貸出経路・故障結果と未検証組合せは[PLAN_SUSPEND.md](PLAN_SUSPEND.md)のP6単体受入結果を参照する。画像MCP実装はこの単体受入後に進め、最後の直接連携項目はその実装後に検証する。OpenCode等ハーネスの実行はユーザー指示により後日扱う。
+NInfer単体項目は2026-10-02にWSLC/RTX3090の指定160K/MTP3/Vision overlay構成で受入済み。容量・RAM・100cycle・raw token・Graph・overlay両貸出経路・故障結果と未検証組合せは[PLAN_SUSPEND.md](PLAN_SUSPEND.md)のP6単体受入結果を参照する。画像MCP実装は別作業であり、その連携検証は本機能の完了条件に含めない。OpenCode等ハーネスの実行はユーザー指示により後日扱う。

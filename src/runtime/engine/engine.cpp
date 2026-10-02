@@ -432,8 +432,16 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
         immediate.result.timings.prepare_seconds    = prepare_seconds;
         immediate.result.timings.total_seconds      = prepare_seconds;
         prompt.impl_.reset();
-        return GenerationHandle(std::make_unique<GenerationHandle::Impl>(
-            impl_, std::move(immediate), resolved_sampling));
+        return std::visit([&](auto& core) -> GenerationHandle {
+            if constexpr (requires { core->accept_immediate_submission([] {}); }) {
+                return core->accept_immediate_submission([&] {
+                    return GenerationHandle(std::make_unique<GenerationHandle::Impl>(
+                        impl_, std::move(immediate), resolved_sampling));
+                });
+            } else {
+                throw std::logic_error("Engine generation core is unavailable");
+            }
+        }, impl_->core);
     }
 
     return std::visit(

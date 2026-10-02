@@ -86,6 +86,9 @@ Inference endpoints return HTTP 503 before SSE starts while the model is suspend
 resuming or in error. `/health` reports 503 when unavailable. Model listing, residency status and
 diagnostics remain available. A fatal residency failure returns 500 for management operations and
 retains `last_error` and the persistent snapshot until process shutdown; restart the process to recover.
+Failed pool attachment releases pieces already created by that attempt. If cleanup itself fails,
+the remaining backing stays tracked for cleanup at shutdown and appears in residency byte counts.
+CPU-only zero-output submissions use the same admission boundary as residency transitions.
 
 The residency JSON reports state, enabled flag, known NInfer backing bytes, snapshot bytes,
 artifact-read/H2D byte counts and the last operation timings. Device byte counts exclude CUDA

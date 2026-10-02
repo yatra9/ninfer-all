@@ -28,10 +28,14 @@ fresh workspace before each replay. It returns CTest skip code 77 without usable
 `ninfer_suspend_backing_test` qualifies the opt-in arena and both overlay pools across
 detach/new-backing attach, arena moves and detached destruction, create/map/access fault
 cleanup, busy rejection, and subsequent overlay loans using the new handles.
+On Linux, standalone `ninfer_suspend_pool_failure_test` injects create/map/access failures at
+the second piece of both pools. Its 18 cases also cover rollback unmap/release failures,
+immediate release of successful pieces and destructor retry of only the retained resources.
 `ninfer_model_suspend_test` runs a generated two-layer attention/GDN artifact with
 supported dense geometry and BF16/row-scaled FP8 weights through the public Engine:
 opt-in/disabled handling, active and queued request rejection, repeated fresh-backing generation,
-concurrent management/status calls, zero-output submission rejection while suspended,
+concurrent management/status calls, zero-output submission rejection while suspended and
+1000 zero-output submissions racing ten suspend/resume cycles,
 immutable-source failure with retained diagnostics/snapshot, and suspended/error destruction.
 It is standalone for targeted GPU acceptance without rebuilding the complete test bundle.
 `ninfer_model_residency_http_test` uses the same generated artifact with a real HTTP listener

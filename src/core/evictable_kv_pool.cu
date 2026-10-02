@@ -288,7 +288,23 @@ void EvictableKVPool::attach_backing() {
             impl.map_home(i);
         }
         impl.detached = false;
-    } catch (...) { impl.poisoned = true; throw; }
+    } catch (...) {
+        impl.poisoned = true;
+        // Roll back every piece created by this attach. Keep only resources whose cleanup
+        // failed, so destruction can retry without losing ownership or double-unmapping.
+        for (std::size_t i = 0; i < impl.handles.size(); ++i) {
+            if (impl.home_mapped[i]) {
+                if (cuMemUnmap(impl.home + impl.offsets[i], impl.sizes[i]) != CUDA_SUCCESS) {
+                    continue;
+                }
+                impl.home_mapped[i] = false;
+            }
+            if (impl.handles[i] && cuMemRelease(impl.handles[i]) == CUDA_SUCCESS) {
+                impl.handles[i] = 0;
+            }
+        }
+        throw;
+    }
 }
 
 std::size_t EvictableKVPool::granularity() const noexcept { return impl_->granularity; }

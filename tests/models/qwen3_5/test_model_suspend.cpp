@@ -103,6 +103,35 @@ void run() {
         first.join(); second.join();
         require(!failed_race && engine.resume().state == ModelResidencyState::Ready,
                 "concurrent management damaged residency");
+        // CPU-only submissions must share the admission boundary with suspend/resume.
+        std::barrier immediate_start(2);
+        std::atomic<bool> immediate_failed = false;
+        std::jthread immediate_worker([&] {
+            immediate_start.arrive_and_wait();
+            for (int i = 0; i < 1000; ++i) {
+                try {
+                    RequestOptions zero;
+                    zero.execution.requested_output_tokens = 0;
+                    auto result = engine.submit(engine.prepare_tokens({65, 66}), zero).wait();
+                    if (!result.generated_token_ids.empty() || result.finish_reason != FinishReason::OutputLimit) {
+                        immediate_failed = true;
+                    }
+                } catch (const RequestError& error) {
+                    if (error.kind() != RequestErrorKind::Unavailable) { immediate_failed = true; }
+                } catch (...) { immediate_failed = true; }
+            }
+        });
+        immediate_start.arrive_and_wait();
+        for (int i = 0; i < 10; ++i) {
+            (void)engine.suspend();
+            RequestOptions zero;
+            zero.execution.requested_output_tokens = 0;
+            rejects<RequestError>([&] { (void)engine.submit(engine.prepare_tokens({65, 66}), zero); },
+                                  "suspended CPU-only submission was admitted");
+            (void)engine.resume();
+        }
+        immediate_worker.join();
+        require(!immediate_failed, "CPU-only admission race failed");
         (void)engine.suspend();
         const auto timestamp = std::filesystem::last_write_time(fixture.file.entry);
         std::filesystem::last_write_time(fixture.file.entry, timestamp + std::chrono::seconds(10));
