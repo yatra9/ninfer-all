@@ -444,3 +444,16 @@ Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages
 - 記録: /tmp/ninfer-suspend-admission-mutation-build.log、/tmp/ninfer-suspend-admission-mutation-test.log、/tmp/ninfer-suspend-admission-restored-build.log。ローカルの再現補助は .cache/suspend-admission-mutation.py（検証用、commit対象外）。tests READMEへ決定的な実行順と検証範囲を追記。全diffレビュー・git diff --check実施。
 - 制限: linker wrapを使う決定的caseはLinux専用。Windows native/全suite/実モデル100cycleは今回未実施（製品コード変更なし、テストだけの修正）。SPECの受付契約は変更不要。画像MCP連携は引き続き対象外。
 - 残作業: 今回の再監査指摘は解消済み、NInfer suspendの修正範囲に未完了項目なし。再検証は ninfer_model_suspend_test targetをbuildし、その同名CTestまたは実行ファイルを実行する。既存container/build tree/model volumeは保持。
+
+### 全体再監査修正: H2D完了保証・weight復元時間（2026-10-02）
+
+- 指摘と修正: persistentのpageable H2DはHost staging後にreturnできるため、restore_storageでdefault streamの完了同期・エラー確認を追加。同期成功後にのみworkspace復帰・snapshot解放・READY公開へ進む。同期失敗は既存ERROR処理へ入りsnapshotと診断を保持し、推論を拒否する。
+- weight uploadの計測開始をtranscodeの読込・変換・H2Dより前へ移動し、transcode-onlyのreturnでもupload_secondsを設定する。各transcode H2Dはdestination rankがcurrentの間にdefault streamを同期し、転送完了を含む時間を報告する。通常のcoalesced direct-read/staging経路は維持する。
+- Linux専用standalone ninfer_suspend_restore_completion_testを追加。pageable H2Dの許容される非同期完了を、pinned stagingとdefault-stream callback gateで再現。DMA保留中はRESUMING・snapshot保持・受付停止を必須とし、解放後のREADY/生成成功と、同期時のone-shotエラーによるERROR/診断/snapshot保持/submit拒否を検証する。製品テストフックは追加しない。
+- Linux専用standalone ninfer_suspend_upload_timing_testを追加。通常のみ・transcodeのみ・混在の3経路で復元bytes/H2D計数と非ゼロ時間を確認し、transcode uploadへ注入した20msが計測に含まれることを必須とする。混在fixtureはartifactの256-byte object alignmentを満たすよう補正済み。
+- 検証環境: ninfer-suspend-dev / WSLC Linux / RTX3090 / CUDA13.1 / GCC13。prepare-build.sh後、-j8でninfer・ninfer-serve・追加2target・既存Engine/HTTP targetの差分build/link成功。初回logは /tmp/ninfer-suspend-completion-fix-build.log。
+- 回帰チェック: completionの成功/同期失敗2ケースPASS、uploadの3経路PASS、ninfer_model_suspend_test PASS（18.08秒）、ninfer_model_residency_http_test PASS（2.30秒）。最終差分の確認とgit diff --checkを実施。
+- Mutation検証: host sourceを変更せずコンテナ内sourceだけで、persistent完了同期を除去した版はexit1「resume published READY before persistent H2D completed」、旧計測位置/early returnへ戻した版はexit1「restore timing or byte counts missing」。finallyで元のsource bytesを復元しrebuild、追加2testはそれぞれPASS。logは /tmp/suspend-persistent-completion-{mutation-build,mutation-test,restored-build}.log と /tmp/suspend-weight-timing-{mutation-build,mutation-test,restored-build}.log。再現補助 .cache/check_suspend_completion_mutations.py は検証用でcommit対象外。
+- SPECのpageable H2D完了・同期失敗とtranscode-only計測契約、serving説明、tests READMEを更新した。既存100cycleの計測は修正前の値であり、新しい同期を含めた実モデル性能値としては扱わない。
+- 未実施: Windows native、全suite、実モデル100cycleの再実行、新規transcode完了同期のmulti-GPU実機試験。新規故障/計測testsはLinux linker wrapを使用する。実モデル受入結果は従来記録を保持し、画像MCP連携は引き続き対象外。
+- 残作業: 今回の2指摘の修正範囲に未完了項目なし。再検証は ninfer_suspend_restore_completion_test、ninfer_suspend_upload_timing_test、ninfer_model_suspend_test、ninfer_model_residency_http_testをbuildし、同名CTestを実行する。既存container/build tree/native model volumeは保持。

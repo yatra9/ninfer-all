@@ -32,6 +32,12 @@ ninfer_add_test(ninfer_model_suspend_test STANDALONE
   LIBRARIES ninfer_engine ninfer_core ninfer::json)
 set_tests_properties(ninfer_model_suspend_test PROPERTIES SKIP_RETURN_CODE 77)
 if(UNIX AND NOT APPLE)
+  ninfer_add_test(ninfer_suspend_restore_completion_test STANDALONE
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_suspend_restore_completion.cpp"
+    LIBRARIES ninfer_engine ninfer_core ninfer::json)
+  target_link_options(ninfer_suspend_restore_completion_test PRIVATE
+    -Wl,--wrap=cudaMemcpy -Wl,--wrap=cudaStreamSynchronize)
+  set_tests_properties(ninfer_suspend_restore_completion_test PROPERTIES SKIP_RETURN_CODE 77)
   target_compile_definitions(ninfer_model_suspend_test PRIVATE NINFER_TEST_WRAP_SAMPLING=1)
   target_link_options(ninfer_model_suspend_test PRIVATE
     -Wl,--wrap=_ZN6ninfer7runtime16resolve_samplingERKNS_21ModelSamplingDefaultsENS_12SamplingModeERKNS_17SamplingOverridesE)

@@ -91,6 +91,9 @@ Program::StorageRestoreTiming detail::ProgramImpl::restore_storage() {
     const auto h2d_start = Clock::now();
     residency_cuda(cudaMemcpy(persistent.base(), residency_snapshot.get(), persistent.capacity(),
                               cudaMemcpyHostToDevice), "restore whole persistent arena");
+    // Pageable H2D can return once staged, before DMA completes on the default stream.
+    // Engine streams are non-blocking: finish and check this copy before publishing READY.
+    residency_cuda(cudaStreamSynchronize(nullptr), "complete persistent arena restore");
     timing.h2d_seconds = elapsed(h2d_start);
     const auto workspace_map_start = Clock::now();
     workspace_storage.attach_backing();

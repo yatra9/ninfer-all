@@ -41,6 +41,13 @@ On Linux, test-only link wrapping pauses a zero-output submission after its init
 check. Suspend completes before that submission continues, so final admission must reject it.
 This deterministically covers the race; removing final admission makes the test fail.
 It is standalone for targeted GPU acceptance without rebuilding the complete test bundle.
+Linux standalone `ninfer_suspend_restore_completion_test` stages the persistent H2D into pinned
+memory and holds its default-stream DMA behind a callback gate. It requires RESUMING and retained
+snapshot until completion, then checks successful generation or an injected synchronization
+failure with ERROR, rejected admission and retained diagnostics/snapshot.
+`ninfer_suspend_upload_timing_test` covers ordinary, transcode-only and mixed weight restores.
+A bounded delay inside transcode upload must appear in the reported duration; restored bytes and
+transfer counts are also checked. Both use test-only linker wrapping and skip without CUDA/VMM.
 `ninfer_model_residency_http_test` uses the same generated artifact with a real HTTP listener
 to check authentication, public aliases, management body validation, service response reservations,
 suspended inference rejection, explicit/idempotent resume and ERROR diagnostics. The CLI and

@@ -418,6 +418,7 @@ MaterializationStats upload_device_materialization(
     // Transcoded objects are read whole, requantized on the host and uploaded synchronously.
     // They are the vocabulary-sized exceptions a startup option asked for, so bounded extra Host
     // memory (one object at a time) is acceptable and the direct-I/O pipeline stays unchanged.
+    const auto start = std::chrono::steady_clock::now();
     std::uint64_t transcoded_bytes = 0;
     for (const DevicePlacement* placement : transcoded) {
         const auto source = reader.read_object(placement->object);
@@ -431,12 +432,12 @@ MaterializationStats upload_device_materialization(
         check_cuda(cudaMemcpy(destination, encoded.data(), encoded.size(),
                               cudaMemcpyHostToDevice),
                    "upload transcoded weight bytes");
+        check_cuda(cudaStreamSynchronize(nullptr), "complete transcoded weight upload");
         transcoded_bytes = checked_add(transcoded_bytes, encoded.size(), "transcoded bytes");
         phase.progress(transcoded_bytes, total);
     }
     stats.h2d_bytes = transcoded_bytes;
     std::uint64_t copied = 0;
-    const auto start     = std::chrono::steady_clock::now();
     bool uploaded_any    = false;
     // One staging pass per rank, each on its own device: a host-to-device copy and the event that
     // retires its slot both belong to the destination device, so they cannot be shared across
@@ -532,6 +533,8 @@ MaterializationStats upload_device_materialization(
         if (next_range != ranges.size()) { throw ArtifactError("incomplete device upload"); }
     }
     if (!uploaded_any) {
+        stats.upload_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         phase.complete(transcoded_bytes, total);
         return stats;
     }

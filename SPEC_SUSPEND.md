@@ -126,6 +126,7 @@ H2D:
              host_persistent_snapshot,
              persistent.capacity(),
              cudaMemcpyHostToDevice)
+  cudaStreamSynchronize(nullptr) // pageable H2Dのdefault-stream DMA完了・エラー確認
 ```
 
 snapshot buffer は suspend/resume 機能有効時に lazy allocate してよい。snapshot は `SUSPENDED` の間だけ保持し、resume 成功後は解放してよい。
@@ -659,6 +660,7 @@ VMM map時間はweight/persistent/workspaceの新規backing create/map/accessの
 persistent H2D時間は全capacityの同期raw copyのみ。weight restore時間はmapを除く既存の
 artifact read・transcode・staging・H2D pipeline全体で、読込と転送bytesをそれぞれ報告する。
 readとH2Dはoverlapするため、weight restoreを単純なread時間とcopy時間の和として扱わない。
+transcode-only経路も計測対象とし、transcodeの読込・変換・H2D完了を計測に含める。
 
 以下を計測する。
 
@@ -715,6 +717,8 @@ SSD read error / corrupt artifact / H2D error の場合:
 ### 16.3 Persistent restore failure
 
 same-VA remap または H2D restore に失敗した場合は state = ERROR とする。
+pageable H2Dは呼出しのreturnだけではDMA完了を保証しないため、転送streamの完了同期と
+エラー確認を必須とする。同期成功後にのみsnapshotを解放しREADYを公開する。
 
 ### 16.4 VMM remap failure
 

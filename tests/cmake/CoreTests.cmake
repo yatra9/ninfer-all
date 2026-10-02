@@ -42,6 +42,11 @@ ninfer_add_test(ninfer_suspend_backing_test
 set_tests_properties(ninfer_suspend_backing_test PROPERTIES SKIP_RETURN_CODE 77)
 
 if(UNIX AND NOT APPLE)
+  ninfer_add_test(ninfer_suspend_upload_timing_test STANDALONE
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/../artifact/test_suspend_upload_timing.cpp"
+    LIBRARIES ninfer_artifact ninfer_core CUDA::cuda_driver ninfer::json)
+  target_link_options(ninfer_suspend_upload_timing_test PRIVATE -Wl,--wrap=cudaMemcpy)
+  set_tests_properties(ninfer_suspend_upload_timing_test PROPERTIES SKIP_RETURN_CODE 77)
   ninfer_add_test(ninfer_suspend_pool_failure_test STANDALONE
     SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_suspend_pool_failure.cpp"
     LIBRARIES ninfer_core CUDA::cuda_driver)

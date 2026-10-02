@@ -93,7 +93,10 @@ CPU-only zero-output submissions use the same admission boundary as residency tr
 The residency JSON reports state, enabled flag, known NInfer backing bytes, snapshot bytes,
 artifact-read/H2D byte counts and the last operation timings. Device byte counts exclude CUDA
 context/driver/graph allocations and VA reservations. VMM map, persistent D2H/H2D and weight upload
-are timed separately; weight restore includes the existing overlapped artifact-read/upload pipeline.
+are timed separately; weight restore includes transcode read/conversion/upload and the existing
+overlapped artifact-read/upload pipeline, including transcode-only loads. Persistent H2D completion
+is checked before snapshot release and READY publication; asynchronous completion failures retain
+the snapshot and publish ERROR.
 Host snapshot capacity adds to the process RAM requirement while suspended.
 
 Vision is disabled by default: its weights and Vision-specific unified-workspace extent are not
