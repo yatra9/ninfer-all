@@ -12,7 +12,12 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
+#include <future>
 #include <limits>
+#include <mutex>
+#include <thread>
 #include <vector>
 #include <string>
 #include <tuple>
@@ -61,6 +66,70 @@ public:
     std::byte* aligned_data = nullptr;
     cudaEvent_t event       = nullptr;
     bool pending            = false;
+    std::future<std::size_t> read;
+};
+
+// Only positional file I/O runs on these workers. CUDA events and uploads remain on the
+// caller's current rank. Join before destroying any staging slot, including on upload failure.
+class DirectReads {
+public:
+    explicit DirectReads(std::size_t count) {
+        workers_.reserve(count);
+        try {
+            for (std::size_t i = 0; i < count; ++i) {
+                workers_.emplace_back([this] {
+                    for (;;) {
+                        std::packaged_task<std::size_t()> task;
+                        {
+                            std::unique_lock lock(mutex_);
+                            ready_.wait(lock, [this] { return stopping_ || !tasks_.empty(); });
+                            if (stopping_) { return; }
+                            task = std::move(tasks_.front());
+                            tasks_.pop_front();
+                        }
+                        task(); // exceptions are returned to the upload caller through its future
+                    }
+                });
+            }
+        } catch (...) {
+            stop();
+            throw;
+        }
+    }
+
+    ~DirectReads() { stop(); }
+    DirectReads(const DirectReads&) = delete;
+    DirectReads& operator=(const DirectReads&) = delete;
+
+    std::future<std::size_t> submit(const Reader& reader, std::size_t file,
+                                    std::uint64_t source, std::span<std::byte> destination) {
+        std::packaged_task<std::size_t()> task([&reader, file, source, destination] {
+            return reader.read_direct(file, source, destination);
+        });
+        auto result = task.get_future();
+        {
+            std::lock_guard lock(mutex_);
+            tasks_.push_back(std::move(task));
+        }
+        ready_.notify_one();
+        return result;
+    }
+
+private:
+    void stop() {
+        {
+            std::lock_guard lock(mutex_);
+            stopping_ = true;
+            tasks_.clear();
+        }
+        ready_.notify_all();
+        for (auto& worker : workers_) { if (worker.joinable()) { worker.join(); } }
+    }
+    std::mutex mutex_;
+    std::condition_variable ready_;
+    std::deque<std::packaged_task<std::size_t()>> tasks_;
+    std::vector<std::thread> workers_;
+    bool stopping_ = false;
 };
 
 // Also covers failure between a queued copy and its event record. Destruct before slots.
@@ -105,6 +174,13 @@ struct ReadSpan {
     std::size_t file    = 0;
     std::uint64_t begin = 0;
     std::uint64_t end   = 0;
+};
+
+struct ReadChunk {
+    std::size_t file;
+    std::uint64_t source;
+    std::size_t request;
+    std::size_t required;
 };
 
 float read_divisor(const Reader& reader, ObjectHandle handle, const WeightGeometry& geometry,
@@ -488,44 +564,65 @@ MaterializationStats upload_device_materialization(
             slots.push_back(std::make_unique<Slot>(slot_bytes));
         }
         pin_phase.complete();
-        TransferCompletion completion{transfer_stream};
-        std::size_t next_slot  = 0;
-        std::size_t next_range = 0;
+        std::vector<ReadChunk> chunks;
         for (const auto& span : spans) {
             for (auto source = span.begin; source < span.end; source += slot_bytes) {
-                auto& slot = *slots[next_slot++ % slot_count];
-                slot.wait();
                 const auto remaining = span.end - source;
-                const auto request   = static_cast<std::size_t>(std::min<std::uint64_t>(
+                const auto request = static_cast<std::size_t>(std::min<std::uint64_t>(
                     slot_bytes, align_up(remaining, kPayloadAlignment, "direct block bytes")));
-                const auto received  = reader.read_direct(
-                    span.file, source, {slot.data(), request});
-                if (received < std::min<std::uint64_t>(request, remaining)) {
-                    throw ArtifactError("direct read ended before the required payload");
+                chunks.push_back({span.file, source, request,
+                                  static_cast<std::size_t>(std::min<std::uint64_t>(request, remaining))});
+            }
+        }
+        TransferCompletion completion{transfer_stream};
+        // At most four chunks are buffered and at most two direct reads are active. Declare
+        // readers after completion: unwind joins I/O before draining CUDA and freeing slots.
+        DirectReads readers(std::min<std::size_t>(2, slot_count));
+        const auto schedule = [&](std::size_t index) {
+            const auto& chunk = chunks[index];
+            auto& slot = *slots[index % slot_count];
+            slot.wait();
+            slot.read = readers.submit(reader, chunk.file, chunk.source, {slot.data(), chunk.request});
+        };
+        for (std::size_t i = 0; i < std::min(slot_count, chunks.size()); ++i) { schedule(i); }
+        std::size_t next_range = 0;
+        for (std::size_t index = 0; index < chunks.size(); ++index) {
+            const auto& chunk = chunks[index];
+            const auto source = chunk.source;
+            auto& slot = *slots[index % slot_count];
+            const auto received = slot.read.get();
+            if (received < chunk.required) {
+                throw ArtifactError("direct read ended before the required payload");
+            }
+            stats.read_bytes = checked_add(stats.read_bytes, received, "read bytes");
+            const auto chunk_end  = checked_add(source, received, "read block end");
+            while (next_range < ranges.size() && ranges[next_range].file == chunk.file &&
+                   ranges[next_range].begin < chunk_end) {
+                const auto& range = ranges[next_range];
+                const auto begin  = std::max(source, range.begin);
+                const auto end    = std::min(chunk_end, range.end);
+                if (begin < end) {
+                    check_cuda(cudaMemcpyAsync(range.destination + (begin - range.begin),
+                                               slot.data() +
+                                                   (begin - source),
+                                               static_cast<std::size_t>(end - begin),
+                                               cudaMemcpyHostToDevice, transfer_stream),
+                               "upload weight bytes");
+                    copied = checked_add(copied, end - begin, "copied bytes");
                 }
-                stats.read_bytes = checked_add(stats.read_bytes, received, "read bytes");
-                const auto chunk_end  = checked_add(source, received, "read block end");
-                while (next_range < ranges.size() && ranges[next_range].file == span.file &&
-                       ranges[next_range].begin < chunk_end) {
-                    const auto& range = ranges[next_range];
-                    const auto begin  = std::max(source, range.begin);
-                    const auto end    = std::min(chunk_end, range.end);
-                    if (begin < end) {
-                        check_cuda(cudaMemcpyAsync(range.destination + (begin - range.begin),
-                                                   slot.data() +
-                                                       (begin - source),
-                                                   static_cast<std::size_t>(end - begin),
-                                                   cudaMemcpyHostToDevice, transfer_stream),
-                                   "upload weight bytes");
-                        copied = checked_add(copied, end - begin, "copied bytes");
-                    }
-                    if (range.end > chunk_end) { break; }
-                    ++next_range;
-                }
-                check_cuda(cudaEventRecord(slot.event, transfer_stream),
-                           "record weight staging completion");
-                slot.pending = true;
-                phase.progress(checked_add(copied, transcoded_bytes, "uploaded bytes"), total);
+                if (range.end > chunk_end) { break; }
+                ++next_range;
+            }
+            check_cuda(cudaEventRecord(slot.event, transfer_stream),
+                       "record weight staging completion");
+            slot.pending = true;
+            phase.progress(checked_add(copied, transcoded_bytes, "uploaded bytes"), total);
+            // Submit the next upload before waiting to recycle the preceding slot. Waiting
+            // on the slot just submitted would force every chunk's H2D to finish in isolation.
+            if (slot_count == 1) {
+                if (index + 1 < chunks.size()) { schedule(index + 1); }
+            } else if (index != 0 && index - 1 + slot_count < chunks.size()) {
+                schedule(index - 1 + slot_count);
             }
         }
         for (const auto& slot : slots) { slot->wait(); }

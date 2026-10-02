@@ -83,6 +83,9 @@ added up to tens of GB. Each test keeps its name as a program in the bundle and 
 own process under CTest. Run one by hand with `build/tests/ninfer_tests <name> [args...]`;
 `ninfer_tests --list` prints the names. `ninfer_jinja_test` and
 `ninfer_artifact_materialization_test` stay standalone because Python tests invoke them by path.
+The materialization test checks patterned continuation payloads larger than the four-slot staging
+ring through startup and three same-address restores, with an unchanged 256 MiB staging bound.
+A truncated continuation also exercises parallel read failure while uploads are in flight.
 A test's helpers and entry function must be internal (anonymous namespace) so that programs do not
 collide at link time. The mechanism is `cmake/NinferBundles.cmake`.
 `ops/op_tester.h` and `ops/op_check.h` own only reusable device/guard and comparison mechanics.

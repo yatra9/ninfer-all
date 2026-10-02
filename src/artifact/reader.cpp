@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <mutex>
 
 namespace ninfer::artifact {
 
@@ -17,6 +18,7 @@ struct Reader::Impl {
     std::uint64_t entry_payload_start = 0;
     std::uint64_t file_bytes          = 0;
     mutable std::vector<std::unique_ptr<InputFile>> files;
+    mutable std::mutex files_mutex;
     mutable std::vector<std::optional<WeightGeometry>> geometries;
     struct SourceIdentity {
         std::filesystem::path path;
@@ -67,6 +69,9 @@ struct Reader::Impl {
     }
 
     InputFile& file(std::size_t index) const {
+        // Concurrent direct readers may first encounter the same continuation. Publish one
+        // fully validated file; the positional read itself runs outside this lock.
+        std::lock_guard lock(files_mutex);
         if (index >= files.size()) { throw ArtifactError("invalid continuation index"); }
         if (!files[index]) {
             const auto& record = directory.files[index];

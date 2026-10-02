@@ -222,6 +222,9 @@ Frontend 和 Parameters，最后释放 Model backing。默认情况下 Reader �
 启用 model suspend 时，Model backing 保留地址稳定的 Reader 和仅含 Device placement 的恢复计划；
 Host/Pinned payload 不重复保留。恢复复用初次加载的范围合并、staging、transcode 和上传实现，
 写入原有 Device destination，既有 parent、binding 与 Parameters 不重建。
+Device payload 的 direct read 最多两路并行，预读限于原有最多四个 64 MiB pinned slot。
+只有文件读取在 CPU worker 执行；CUDA 上传和 slot event 在调用者当前 rank 上管理。
+错误时先停止并 join reader，再 drain transfer stream，之后才释放 staging。
 
 启用 suspend 的单 GPU Program 为 persistent 与 workspace 保留固定 VA。空闲时，persistent 的
 完整 capacity 原始字节写入惰性分配的普通 Host RAM；恢复保持 CPU cache/lease 元数据和所有 Graph，

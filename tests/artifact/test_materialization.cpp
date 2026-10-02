@@ -351,7 +351,8 @@ void file_roundtrip(DeviceContext& device, const std::filesystem::path& path, bo
 }
 
 void staging_reuse(DeviceContext& device) {
-    // More than one full staging ring, with distinct pages and a partial final block.
+    // More than one full staging ring, with distinct pages and a partial final block. Both
+    // readers first encounter the same continuation; startup and restore must preserve bytes.
     constexpr std::size_t bytes = 5ULL * 64 * 1024 * 1024 + 1024;
     Fixture fixture;
     fixture.payload.clear();
@@ -361,19 +362,30 @@ void staging_reuse(DeviceContext& device) {
                                                  {"shape", {bytes / 2}},
                                                  {"format", "bf16"},
                                                  {"layout", "contiguous_le_v1"},
-                                                 {"offset", 0},
+                                                 {"offset", 4096},
                                                  {"bytes", bytes}}})},
                        {"bindings", {{"large", {{"object", "large"}}}}},
                        {"uses", Json::array()},
-                       {"files", Json::array({{{"path", nullptr}, {"payload_bytes", bytes}}})}};
+                       {"files", Json::array({{{"path", nullptr}, {"payload_bytes", 4096}},
+                                              {{"path", "weights-large.bin"}, {"payload_bytes", bytes}}})}};
     const auto text = fixture.root.dump();
     std::array<std::byte, 4096> header{};
     const std::array<unsigned char, 8> magic{'N', 'I', 'N', 'F', 'E', 'R', 0, 3};
     for (std::size_t i = 0; i < magic.size(); ++i) { header[i] = std::byte(magic[i]); }
     put_word(header, 8, text.size(), 8);
     std::memcpy(header.data() + 32, text.data(), text.size());
-    std::ofstream file(fixture.entry, std::ios::binary | std::ios::trunc);
+    std::ofstream entry(fixture.entry, std::ios::binary | std::ios::trunc);
+    entry.exceptions(std::ios::badbit | std::ios::failbit);
+    entry.write(reinterpret_cast<const char*>(header.data()), header.size());
+    const std::array<std::byte, 4096> unused_entry_payload{};
+    entry.write(reinterpret_cast<const char*>(unused_entry_payload.data()), unused_entry_payload.size());
+    entry.close();
+    const auto part_path = fixture.directory / "weights-large.bin";
+    std::ofstream file(part_path, std::ios::binary | std::ios::trunc);
     file.exceptions(std::ios::badbit | std::ios::failbit);
+    header.fill(std::byte{});
+    std::copy(kPartMagic.begin(), kPartMagic.end(), header.begin());
+    put_word(header, 8, 1, 8);
     file.write(reinterpret_cast<const char*>(header.data()), header.size());
     std::array<std::byte, 4096> page{};
     for (std::size_t offset = 0; offset < bytes; offset += page.size()) {
@@ -384,21 +396,45 @@ void staging_reuse(DeviceContext& device) {
                    std::min(page.size(), bytes - offset));
     }
     file.close();
-    Reader reader(fixture.entry);
-    Binder binder(reader);
+    auto reader = std::make_shared<Reader>(fixture.entry);
+    Binder binder(*reader);
     (void)binder.parameter("large", {bytes / 2});
-    auto backing     = materialize(reader, std::move(binder).finish(), device);
-    const auto* base = backing.device_parent(reader.find("large")).data;
+    auto plan = std::move(binder).finish();
+    const bool suspendable = EvictableWeightPool::supported(device);
+    auto backing = materialize(*reader, MaterializationPlan(plan), device, nullptr, nullptr, suspendable);
+    const auto* base = backing.device_parent(reader->find("large")).data;
     std::vector<std::byte> chunk(1024 * 1024);
-    for (std::size_t offset = 0; offset < bytes; offset += chunk.size()) {
-        const auto count = std::min(chunk.size(), bytes - offset);
-        CUDA_CHECK(cudaMemcpy(chunk.data(), base + offset, count, cudaMemcpyDeviceToHost));
-        for (std::size_t i = 0; i < count; ++i) {
-            const auto position = offset + i;
-            require(chunk[i] == std::byte((position * 17 + (position / 4096) * 13) % 251),
-                    "staging slot reuse overwrote an in-flight or later block");
+    const auto verify = [&] {
+        for (std::size_t offset = 0; offset < bytes; offset += chunk.size()) {
+            const auto count = std::min(chunk.size(), bytes - offset);
+            CUDA_CHECK(cudaMemcpy(chunk.data(), base + offset, count, cudaMemcpyDeviceToHost));
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto position = offset + i;
+                require(chunk[i] == std::byte((position * 17 + (position / 4096) * 13) % 251),
+                        "staging slot reuse overwrote an in-flight or later block");
+            }
+        }
+    };
+    verify();
+    if (suspendable) {
+        backing.retain_restore_source(reader, plan);
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            backing.detach_backing();
+            const auto stats = backing.restore_backing(device);
+            require(stats.h2d_bytes == bytes && stats.peak_staging_bytes == 4ULL * 64 * 1024 * 1024,
+                    "parallel restore omitted payload or increased staging capacity");
+            require(backing.device_parent(reader->find("large")).data == base,
+                    "parallel restore changed the weight address");
+            verify();
         }
     }
+    // Bypass the immutable-source guard to exercise an I/O failure after read-ahead and H2D
+    // have started. The reader must join pending I/O and drain uploads before freeing slots.
+    std::filesystem::resize_file(part_path, 2ULL * 64 * 1024 * 1024 + 4096);
+    const std::array<DeviceSpan, 1> destinations{DeviceSpan{const_cast<std::byte*>(base), plan.device_capacity()}};
+    rejects([&] { (void)upload_device_materialization(*reader, plan, destinations, device); },
+            "truncated parallel read was accepted");
+    device.synchronize();
 }
 
 // Two ranks on one card: the expert-offload split's planning, its separate per-rank arenas and its

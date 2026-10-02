@@ -319,10 +319,16 @@ Readerとdevice placementをModel側で保持し、resume前にファイルサ�
 - SSD / file read
 - source-range coalescing
 - pinned staging buffers
+- 最大2本の並列direct read（LinuxはO_DIRECT、Windowsは非buffered positional read）
 - async H2D
 - deterministic DeviceArena placement
 
 この loader を resume 用にも再利用する。
+
+read-aheadは既存の最大64 MiB×4 staging slot内に限定する。CUDA uploadとevent待ちは
+呼出し側のdevice/rankで管理し、GPUが読むslotを上書きしない。読込結果は元のsource順で
+uploadし、読込/転送失敗時は未着手readを取消し、実行中readをjoinしてからGPU workをdrainし、
+stagingを解放する。Readerの続巻とdirect handleの初回openも並列読込に対応する。
 
 ### 7.3 Materializer のリファクタ
 

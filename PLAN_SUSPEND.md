@@ -5,7 +5,8 @@
 ## 0. 現在地と再開地点
 
 - 要件の正本は [SPEC_SUSPEND.md](SPEC_SUSPEND.md)。本書は実装順序、対象コード、検証、未確定事項を管理する。
-- 最新追加: HTTP suspendのauto_resumeは省略時true、false指定時のみ停止中の生成を即座に503で拒否する。共有restore・bounded受付・切断/deadline/ERRORの追加実装と検証は末尾「HTTP生成要求による共有auto resume」を参照。Engine自身の明示管理契約は維持する。
+- 最新追加（2026-10-03）: O_DIRECT 2並列を初回load/resume共通materializerへ組込み、回帰検証と実Engine測定を完了。最大64 MiB×4 stagingを維持。weight restoreは旧版6.25〜6.32秒→5.76秒、resume全体は測定間の変動あり。末尾「O_DIRECT 2並列の組込みと実Engine測定」に結果・再現手順・限界を記載。RAM保持案は保留。
+- HTTP追加: suspendのauto_resumeは省略時true、false指定時のみ停止中の生成を即座に503で拒否する。共有restore・bounded受付・切断/deadline/ERRORの追加実装と検証は末尾「HTTP生成要求による共有auto resume」を参照。Engine自身の明示管理契約は維持する。
 - 実装開始（2026-10-02）。P0専用PoC `tests/test_vmm_suspend.cu` を追加し、WSLCの既存
   `ninfer-syntax:dev`、CUDA 13.1.115、RTX 3090でcompile/run成功。1000回のphysical backing
   解放・新規create・same-VA mapを、単一capture/instantiateのGraphExecで検証した。
@@ -492,3 +493,25 @@ Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages
 - SPECの非目的/HTTP/冪等性/禁止事項/完了条件、serving API/例、Engine architecture、README、tests README、serve --helpを更新。全差分（新規test含む）レビュー・git diff --checkを実施。最終include/help変更後も製品と2testの増分build/link成功、serve --helpの自動resumeデフォルト表示を確認した。最終build logは /tmp/ninfer-auto-resume-final-build.log。
 - 未実施: Windows native、全suite、実モデル100cycle再実行。共有restoreの故障/gateテストはLinux専用。HTTP testは通常CUDA/VMM環境で使用できる。既存realモデルの復元時間は従来測定であり今回のHTTP待機TTFT測定ではない。画像MCP連携は対象外。
 - 残作業: 機能と回帰検証は完了。この機能単位をcommitし、追加作業なし。再検証はninfer_model_residency_http_testとninfer_auto_resume_testをbuildし同名CTestを実行する。既存container/build tree/model volumeは保持する。
+
+### 追加最適化: O_DIRECT 2並列の組込みと実Engine測定（2026-10-03）
+
+- ユーザー指示: weightのRAM保持案は保留し、読込単体で比較済みのO_DIRECT 2並列を製品へ組み込み、実suspend/resumeを測る。
+- 実装完了: artifact materializerの既存source-range coalescingを64 MiB chunkへ分け、最大2本のCPU workerでdirect readする。結果はsource順に同じtransfer streamへuploadする。初回loadとresumeが同じ実装を使う。stagingは従来どおり最大64 MiB×4 slot＋alignment padding、全量Host weight mirrorは追加していない。各rankのpassは順次実行する。
+- 所有権・異常処理: CUDA upload/event操作はcallerのcurrent rankで行い、GPU完了を確認してからslotを再利用する。次のuploadを投入してから前のslotを再利用する順序でread/H2Dを重ねる。例外時は未着手readを取消し、実行中readをjoinしてからtransfer streamをdrainし、その後slotを破棄する。Readerの続巻初回open/検証/公開はmutexで同期し、direct handleの初回openはcall_onceで同期する。Windows overlapped readは要求ごとのeventを使う。
+- 回帰テスト: ninfer_artifact_materialization_testのstaging fixtureを320 MiB＋1024 bytesの続巻へ変更。patterned payloadの全bytesをstartupと3回のsame-VA restore後に照合し、staging 256 MiBを必須とした。続巻を途中でtruncateし、read-ahead/H2D開始後のEOF拒否と正常なdrain/終了を確認する。既存multipart、transcode、HostOnly、per-rank、CUDA event故障cleanupも同targetに含む。
+- build/check: 既存ninfer-suspend-dev、WSLC Linux、RTX3090、CUDA13.1/GCC13。/workspaceから変更sourceだけを/build/srcへコピーし、既存/build/suspend-build-dirのbuild treeを再利用。cmake --build <build-dir> -jでninfer_artifact_materialization_test、reader test object、ninfer、ninfer-serve、ninfer_suspend_upload_timing_testを差分compile/link。最終CTestはmaterialization PASS（4.82秒）、upload timing PASS（0.34秒）、計5.17秒。reader testはbundle objectのcompileのみでありCTest実行とは扱わない。全差分レビューとgit diff --checkも実施。
+- 実モデル測定: ninfer-suspend-real、native volumeの/models/Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer、context/KV163840、rk8v4、FP16 GDN、MTP3、Vision overlay、HostKV8 GiB/HostState8。text/Vision warmup後、public Engineの明示suspend/resumeを各processで5回実行し、各resume後の決定的text raw token列が対照と完全一致することを必須とした。旧版ddd77a87の1読込binaryと変更artifact libraryをリンクした2並列binaryは同じdiagnostic source/flagsを使い、profiler captureなし。以下は初回を除くcycle 1–4の平均（括弧はmin–max）、秒。
+
+| 測定順 | suspend全体 | resume全体 | weight restore | backing map | persistent H2D |
+|---|---:|---:|---:|---:|---:|
+| 旧1読込・前 | 3.427（3.256–3.715） | 7.955（7.690–8.101） | 6.317 | 0.818 | 0.588 |
+| 組込み2並列・最終版 | 3.842（3.761–3.963） | 7.736（7.494–7.994） | 5.765 | 0.872 | 0.839 |
+| 旧1読込・後 | 4.082（3.965–4.221） | 10.244（10.022–10.529） | 6.246 | 0.875 | 2.856 |
+
+- 解釈: weight restoreは前後の旧版に対して0.48〜0.55秒（約8%）短縮。weight restoreはfile read/staging/H2D/同期込みであり、SSD読込だけの時間ではない。resume全体は直前比較では0.22秒短縮だが、旧版の後測定でもpersistent H2Dが0.59→2.86秒へ揺れており、全体の固定的な改善率は主張しない。suspendも旧版の前後で3.43→4.08秒へ変動し、今回の変更により短縮したとは扱わない。初回cycleのsuspend/resumeは旧前5.517/7.703、2並列5.417/8.022、旧後6.066/9.162秒。
+- 正常性・資源: 比較3processの15/15 cycleでtoken完全一致、SUSPENDED retained device bytes=0、READY device bytes=22,865,248,256。各resume weight H2D=17,901,792,256 bytes、direct read=17,901,806,848 bytesが旧版と一致。直接Engineのpersistent snapshot=4,726,981,888 bytes（HTTP構成と区別）。終了後GPU使用量13 MiBへ戻る。snapshot形式/数値演算/APIは変更していない。
+- 記録: E:\koji\work\20260813\NInfer\tmp\suspend-acceptance\profile-20261002\engine-comparison.md とengine-comparison.json、serial-engine-before.*、parallel-engine.*、serial-engine-after.*。main.cpp、serial-engine.sh、parallel-engine.sh、比較script、旧profile/新版profile-parallel binaryも同じ場所。repo .cache/build_suspend_profile.pyで現build treeのstatic librariesから診断binaryを再linkできる。初期schedule版parallel-engine-first.*と製品link IOに重なったparallel-engine-link-overlap.*は参考ログとして保持し、最終比較から除外した。/proc/io read_bytes=0やprocess RSS high-waterをphysical SSD帯域/current suspended RAMの証拠に流用しない。
+- docs: SPEC_SUSPEND.md、artifact-container、Engine architecture、tests READMEに並列read、bounded staging、slot/failure所有権と回帰検証を反映。
+- 未実施: Windows native build/実行、物理multi-GPU実行、全suite、100cycle実モデル/HTTP enduranceの再実行。Windowsの初回openとoverlapped完了同期はコード上対応済みで、実測済み経路はWSLC Linux/O_DIRECT。画像MCP連携は対象外、RAM保持はユーザーにより保留。
+- 次の具体的作業: 今回の組込みと測定は完了。この単位をcommitする。追加の最適化は未着手であり、次の指示がある場合は上記比較レポートを起点に対象を決める。devの増分build treeとnative model volumeは保持。再検証は上記2targetをbuildして同名CTestを実行し、実モデル比較は保存済みscriptを使用する。
