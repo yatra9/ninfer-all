@@ -21,6 +21,9 @@ struct ModelInstance {
     KvCapacityResolution kv_capacity_resolution;
     const std::uint32_t capacity;
     std::unique_ptr<models::qwen3_5::Program> program;
+    [[nodiscard]] std::size_t weight_device_bytes() const noexcept { return model->weight_device_bytes(); }
+    void detach_weights() { model->detach_weights(); }
+    auto restore_weights(DeviceContext& device) { return model->restore_weights(device); }
 
     ModelInstance(std::unique_ptr<models::qwen3_5::Model> model, const EngineOptions& options);
     ~ModelInstance();

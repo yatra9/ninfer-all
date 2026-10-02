@@ -95,6 +95,8 @@ public:
                            options.max_pending_requests),
           pending_timeout_(std::chrono::milliseconds(options.pending_timeout_ms)),
           resources_(make_resource_manager(options, std::move(context_cost))) {
+        residency_status_.enabled = options.enable_model_suspend;
+        refresh_residency_bytes(residency_status_);
         if (max_concurrency_ == 0 || max_concurrency_ > kMaximumConcurrency ||
             options.max_pending_requests == 0 || pending_timeout_.count() <= 0) {
             throw std::invalid_argument("Engine core bounds are invalid");
@@ -138,6 +140,7 @@ public:
     }
 
     ~EngineCore() noexcept {
+        std::unique_lock residency_lock(residency_mutex_);
         {
             std::lock_guard lock(queue_mutex_);
             stopping_ = true;
@@ -222,7 +225,7 @@ public:
         std::uint64_t publication_order = 0;
         {
             std::lock_guard lock(queue_mutex_);
-            if (stopping_ || failed_) {
+            if (stopping_ || failed_ || residency_status_.state != ModelResidencyState::Ready) {
                 throw RequestError(RequestErrorKind::Unavailable,
                                    "inference engine is unavailable");
             }
@@ -268,7 +271,7 @@ public:
 
         {
             std::lock_guard lock(queue_mutex_);
-            if (stopping_ || failed_) {
+            if (stopping_ || failed_ || residency_status_.state != ModelResidencyState::Ready) {
                 --outstanding_;
                 throw RequestError(RequestErrorKind::Unavailable,
                                    "inference engine is unavailable");
@@ -309,10 +312,139 @@ public:
 
     [[nodiscard]] bool is_available() const {
         std::lock_guard lock(queue_mutex_);
-        return !stopping_ && !failed_ &&
+        return !stopping_ && !failed_ && residency_status_.state == ModelResidencyState::Ready &&
                consecutive_context_cache_exhaustions_.load(std::memory_order_relaxed) <
                    kStuckContextCacheExhaustions;
     }
+
+    [[nodiscard]] ModelResidencyStatus residency() const {
+        std::lock_guard lock(queue_mutex_);
+        return residency_status_;
+    }
+    [[nodiscard]] ModelResidencyStatus suspend() { return change_residency(true); }
+    [[nodiscard]] ModelResidencyStatus resume() { return change_residency(false); }
+
+private:
+    void refresh_residency_bytes(ModelResidencyStatus& status) const {
+        status.weight_device_bytes = instance_.weight_device_bytes();
+        status.persistent_device_bytes = instance_.program->persistent_device_bytes();
+        status.workspace_device_bytes = instance_.program->workspace_device_bytes();
+        status.persistent_snapshot_bytes = instance_.program->snapshot_bytes();
+        status.retained_device_bytes = status.weight_device_bytes + status.persistent_device_bytes +
+                                       status.workspace_device_bytes;
+    }
+    ModelResidencyStatus change_residency(bool suspend_requested) {
+        std::unique_lock transition(residency_mutex_, std::try_to_lock);
+        if (!transition.owns_lock()) {
+            throw ModelResidencyError(ModelResidencyErrorKind::Busy, "model residency transition is active");
+        }
+        ModelResidencyStatus status;
+        {
+            std::lock_guard lock(queue_mutex_);
+            if (!residency_status_.enabled) {
+                throw ModelResidencyError(ModelResidencyErrorKind::Unsupported, "model suspend is disabled");
+            }
+            if (stopping_ || failed_ || residency_status_.state == ModelResidencyState::Error) {
+                throw ModelResidencyError(ModelResidencyErrorKind::Failure,
+                    residency_status_.last_error.empty() ? "inference engine is unavailable" : residency_status_.last_error);
+            }
+            const auto desired = suspend_requested ? ModelResidencyState::Suspended : ModelResidencyState::Ready;
+            if (residency_status_.state == desired) { return residency_status_; }
+            if (residency_status_.state != ModelResidencyState::Ready &&
+                residency_status_.state != ModelResidencyState::Suspended) {
+                throw ModelResidencyError(ModelResidencyErrorKind::Busy, "model residency transition is active");
+            }
+            if (outstanding_ != 0 || !pending_.empty()) {
+                throw ModelResidencyError(ModelResidencyErrorKind::Busy, "model has outstanding requests");
+            }
+            status = residency_status_;
+            residency_status_.state = suspend_requested ? ModelResidencyState::Suspending : ModelResidencyState::Resuming;
+            status.state = residency_status_.state;
+        }
+        const auto publish = [&](ModelResidencyStatus next) {
+            std::lock_guard lock(queue_mutex_);
+            residency_status_ = std::move(next);
+        };
+        std::unique_lock execution(execution_mutex_, std::try_to_lock);
+        if (!execution.owns_lock()) {
+            status.state = suspend_requested ? ModelResidencyState::Ready : ModelResidencyState::Suspended;
+            publish(status);
+            throw ModelResidencyError(ModelResidencyErrorKind::Busy, "model execution is active");
+        }
+        bool physical_change_started = false;
+        bool recoverable_host_allocation = false;
+        const auto start = Clock::now();
+        const auto elapsed = [](Clock::time_point from) {
+            return std::chrono::duration<double>(Clock::now() - from).count();
+        };
+        try {
+            device_.bind_to_current_thread();
+            if (suspend_requested) {
+                bool busy = materializing_.has_value();
+                for (const auto& slot : slots_) { busy = busy || slot != nullptr; }
+                if (busy || !instance_.program->residency_idle()) {
+                    status.state = ModelResidencyState::Ready;
+                    publish(status);
+                    throw ModelResidencyError(ModelResidencyErrorKind::Busy, "model requests or context transfers are active");
+                }
+                const auto snapshot_start = Clock::now();
+                recoverable_host_allocation = true;
+                instance_.program->snapshot_persistent();
+                recoverable_host_allocation = false;
+                status.persistent_snapshot_d2h_seconds = elapsed(snapshot_start);
+                const auto before = status.retained_device_bytes;
+                const auto detach_start = Clock::now();
+                physical_change_started = true;
+                // Mark Program storage unsafe before weight detachment can partially fail.
+                instance_.program->detach_storage();
+                instance_.detach_weights();
+                status.vmm_unmap_release_seconds = elapsed(detach_start);
+                refresh_residency_bytes(status);
+                status.released_device_bytes = before - status.retained_device_bytes;
+                status.last_suspend_seconds = elapsed(start);
+                status.state = ModelResidencyState::Suspended;
+            } else {
+                physical_change_started = true;
+                const auto restore_start = Clock::now();
+                const auto weights = instance_.restore_weights(device_);
+                status.weight_restore_seconds = elapsed(restore_start);
+                status.weight_artifact_read_bytes = weights.read_bytes;
+                status.weight_h2d_bytes = weights.h2d_bytes;
+                const auto persistent_start = Clock::now();
+                instance_.program->restore_storage();
+                status.persistent_snapshot_h2d_seconds = elapsed(persistent_start);
+                instance_.program->release_snapshot();
+                refresh_residency_bytes(status);
+                status.mapped_device_bytes = status.retained_device_bytes;
+                status.last_resume_seconds = elapsed(start);
+                status.state = ModelResidencyState::Ready;
+            }
+            status.last_error.clear();
+            publish(status);
+            queue_cv_.notify_all();
+            return status;
+        } catch (const ModelResidencyError& error) {
+            if (error.kind() == ModelResidencyErrorKind::Busy) { throw; }
+            status.last_error = error.what();
+        } catch (const std::bad_alloc& error) {
+            status.last_error = error.what();
+            if (suspend_requested && recoverable_host_allocation && !physical_change_started) {
+                status.state = ModelResidencyState::Ready;
+                refresh_residency_bytes(status);
+                publish(status);
+                throw ModelResidencyError(ModelResidencyErrorKind::Failure, status.last_error);
+            }
+        } catch (const std::exception& error) { status.last_error = error.what(); }
+        catch (...) { status.last_error = "unknown model residency failure"; }
+        status.state = ModelResidencyState::Error;
+        instance_.program->residency_error();
+        refresh_residency_bytes(status);
+        publish(status);
+        throw ModelResidencyError(ModelResidencyErrorKind::Failure, status.last_error);
+
+    }
+
+public:
 
     void reset_memory_peaks() noexcept {
         try {
@@ -2319,6 +2451,10 @@ private:
             }
 
             std::unique_lock execution_lock(execution_mutex_);
+            {
+                std::lock_guard lock(queue_mutex_);
+                if (residency_status_.state != ModelResidencyState::Ready) { continue; }
+            }
             try {
                 set_host_work_class(HostWorkClass::Control);
                 HostPhaseMeasurement boundary = begin_host_phase();
@@ -2490,6 +2626,8 @@ private:
     mutable std::mutex execution_mutex_;
     mutable std::mutex queue_mutex_;
     mutable std::mutex stats_mutex_;
+    mutable std::mutex residency_mutex_;
+    ModelResidencyStatus residency_status_;
     std::condition_variable queue_cv_;
     std::deque<std::shared_ptr<Request>> pending_;
     std::size_t outstanding_              = 0;

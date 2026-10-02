@@ -1152,6 +1152,7 @@ public:
     void detach_storage();
     void restore_storage();
     void release_snapshot() noexcept;
+    void residency_error() noexcept;
 
 private:
     explicit Program(std::unique_ptr<detail::ProgramImpl> impl) noexcept;

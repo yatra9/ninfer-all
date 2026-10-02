@@ -905,6 +905,12 @@ v1 では、複数モデル管理、自動切替、resource class 指定 API、L
 
 ## 23. 完了条件
 
+画像MCPは別リポジトリ `qwen-image-runtime` の
+[SPEC_QWEN_IMAGE_RUNTIME.md](../../qwen-image-runtime/qwen-image-runtime/SPEC_QWEN_IMAGE_RUNTIME.md) と
+[PLAN_QWEN_IMAGE_RUNTIME.md](../../qwen-image-runtime/qwen-image-runtime/PLAN_QWEN_IMAGE_RUNTIME.md)
+に従って実装する。ユーザー指示により、NInferの実装・単体受入、画像MCPの実装・直接テスト、
+両者の連携受入の順で進める。OpenCode等のハーネスからの呼出しは後日別途検討する。
+
 初期実装の Done 条件は以下。
 
 - [ ] RTX 3090 で VMM + existing GraphExec remap PoC が安定動作
@@ -922,4 +928,4 @@ v1 では、複数モデル管理、自動切替、resource class 指定 API、L
 - [ ] suspended 中 inference が 503
 - [ ] busy suspend が 409
 - [ ] suspend/resume の繰り返し試験で leak / corruption がない
-- [ ] OpenCode -> tool call -> image generation -> Qwen resume の end-to-end 動作確認
+- [ ] MCPサーバーを直接呼び出し、suspend -> image generation -> image GPU release -> Qwen resume -> image evaluation を確認する（OpenCode等ハーネス経由の検証は後日別途判断）

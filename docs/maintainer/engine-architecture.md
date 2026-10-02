@@ -229,6 +229,12 @@ Host/Pinned payload 不重复保留。恢复复用初次加载的范围合并、
 在使用前写入。检查覆盖 request、context transaction、Vision window、pool loan，以及 compute、transfer、
 Vision 和 hybrid cache 独立 restore stream。detach 开始后，关闭时不执行读取 Device 的 reset 或 disk spill。
 
+Engine 的 `suspend()`、`resume()` 与 `residency()` 是 residency 管理入口。EngineCore 独占状态；
+状态与 admission 使用同一个短 queue lock。管理操作之间及与 worker execution 的竞争使用 try-lock，
+outstanding reservation、pending 或 Program 忙时立即失败，不取消或清空请求。传输期间不持有 queue lock；
+状态查询只读已发布的 CPU snapshot。非 READY 状态拒绝 submit（包括零输出立即完成），worker 不启动
+Device 操作。shutdown 与 residency 操作串行，失败后保持 ERROR、诊断与 snapshot，禁止隐式 resume。
+
 权重、State/KV backing、block-table matrices、workspace 与 CUDA Graph resources 在 Engine 开始接受请求前
 建立。运行期改变 ownership、mapping、frontier 与 replica placement，但不重建这些大块 Device allocations。
 

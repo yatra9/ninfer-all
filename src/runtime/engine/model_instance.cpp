@@ -29,11 +29,14 @@ namespace ninfer::runtime {
 namespace {
 using Clock = std::chrono::steady_clock;
 
-void validate_options(const EngineOptions& options) {
+void validate_suspend_options(const EngineOptions& options) {
     if (options.enable_model_suspend &&
         (options.purpose != EnginePurpose::Generation || options.devices.size() > 1 || options.wddm_evictable_budget)) {
         throw std::invalid_argument("model suspend requires single-GPU Generation without the WDDM evictable budget");
     }
+}
+void validate_options(const EngineOptions& options) {
+    validate_suspend_options(options);
     if (options.artifact_path.empty()) {
         throw std::invalid_argument("Engine artifact_path must not be empty");
     }
@@ -204,6 +207,7 @@ EngineOptions artifact_scoped_disk_tier(const EngineOptions& options,
 } // namespace
 
 EngineOptions normalize_engine_options(EngineOptions options) {
+    validate_suspend_options(options);
     switch (options.purpose) {
     case EnginePurpose::Generation:
         break;

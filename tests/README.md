@@ -28,6 +28,12 @@ fresh workspace before each replay. It returns CTest skip code 77 without usable
 `ninfer_suspend_backing_test` qualifies the opt-in arena and both overlay pools across
 detach/new-backing attach, arena moves and detached destruction, create/map/access fault
 cleanup, busy rejection, and subsequent overlay loans using the new handles.
+`ninfer_model_suspend_test` runs a generated two-layer attention/GDN artifact with
+supported dense geometry and BF16/row-scaled FP8 weights through the public Engine:
+opt-in/disabled handling, active and queued request rejection, repeated fresh-backing generation,
+concurrent management/status calls, zero-output submission rejection while suspended,
+immutable-source failure with retained diagnostics/snapshot, and suspended/error destruction.
+It is standalone for targeted GPU acceptance without rebuilding the complete test bundle.
 `CMakeLists.txt` includes explicit registrations from `cmake/`, `artifact/`, `models/qwen3_5/`
 and `ops/`. Registration helpers live in `cmake/NinferTests.cmake`; included manifests keep
 executables and CTest working directories under `build/tests/`.

@@ -22,12 +22,14 @@
   Pythonテストは実行していない。Windows nativeでのbuild/runは未検証。
 - 合意済み: suspendはidle時のみ。既存のVision overlayも対応対象とし、対応を別機能として切り離さない。
 - 合意済み（2026-10-02）: 実機検証はWSLC上のLinuxを優先する。P0 PoCと実モデル受入はこの環境から進める。
-- 次の作業: P2 materializerの既存destinationへのupload共通化と、ModelのReader/placement保持。
+- 現在の作業: P4 Engine state/public APIのbuildとGPU behavior testが成功し、checkpoint commitを作成する。次はP5 HTTP・起動オプション・サービス受付gate・timing細分化。新開発imageは ninfer-suspend:dev（FROM ninfer-all:build）、コンテナ ninfer-suspend-dev。既存BuildKit cacheを /build へ取り込んだ差分buildを使用する。正確なbuild pathと再開手順は末尾の最新検証欄参照。
   P0の各arena正確容量・physical量とproduction workspace監査は継続中。予備実測用の
-  `ninfer-suspend-budget` コンテナ（host port 18082）は停止済み。
+  旧 `ninfer-suspend-budget` コンテナ（host port 18082）はユーザーのディスク整理で削除済み。
 - 各実装段階の完了時に、本節へ変更内容、実施した検証、未検証事項、次の作業を記録する。
 - 2026-10-02に実装開始と作業単位ごとのcommitを承認済み。AGENTS.mdのsuspend checkpoint規約に従い、
   検証済み単位をcommitして問題がなければ次段階へ継続する。
+
+ユーザーの最新進行指示（2026-10-02）: 自力で解決できるエラーは修正して止まらず進める。ユーザーに聞かなければ解決できない問題に限り停止して確認する。非同期Askは使わない。以前のbuild後停止指示より、この最新の継続指示を優先する。
 
 ## 1. 実装方針
 
@@ -192,12 +194,16 @@ P3実装（2026-10-02）: opt-inのpersistent/workspaceをVMM化。通常RAMをl
 
 ### P4: Engine state machineとpublic契約
 
-- [ ] EngineOptionsからModel/Program構築へenable flagを伝搬し、VMM capabilityをallocation前に検査する。
-- [ ] §3の状態遷移、即時busy判定、worker排他、availability、終了処理を実装する。
-- [ ] single-GPU Generation以外の非対応組合せは起動時に明示拒否する。flagなしの既存機能は維持する。
-- [ ] queue投入との競合、同時suspend/resume、状態照会、失敗注入をモデルなしでも検証できる範囲でテストする。
+- [x] EngineOptionsからModel/Program構築へenable flagを伝搬し、VMM capabilityをallocation前に検査する。
+- [x] §3の状態遷移、即時busy判定、worker排他、availability、終了処理を実装する。
+- [x] single-GPU Generation以外の非対応組合せは起動時に明示拒否する。flagなしの既存機能は維持する。
+- [x] queue投入との競合、同時suspend/resume、状態照会、失敗注入をモデルなしでも検証できる範囲でテストする。
 
 出口条件: 非READY状態からGPU実行へ到達せず、busy操作がrequest完了待ちにならないこと。
+
+P4作業中（2026-10-02）: EngineCoreへ唯一のresidency state、admission両段階の非READY拒否、管理操作try-lock、execution try-lock、worker再確認、shutdownとの直列化、typed public APIを実装。snapshot allocation以外の失敗はERRORとし、Program cleanupをGPU非参照へ切り替える。hybridの完了済みtransferは待たずpublicationし、独立streamと未完了transferを確認する。suspend有効時のEngine終了ではabortするCUDA_CHECK同期を使用しない。小型BF16 artifactの独立GPU testを追加中（busy active/pending、反復生成、並行管理、非READYのzero-output拒否、source変更ERROR、suspended/error終了）。初回runtime buildは ninfer-suspend-dev /tmp/ninfer-suspend-build で約473/639 targetまで進めたが、下記RAM圧力により中断した（exec session 90506は終了）。Engine/Programの構文検査は成功、hybrid/終了補正を含む再構文検査も成功。新behavior testはbuild完了後にtarget ninfer_model_suspend_testをbuildしCTestで実行する。P4はまだcommit前。timingのmap/D2H/H2D細分化とHTTPはP5。
+
+停止状況（2026-10-02）: 後半のptxasが各約2 GiBへ増加し、WSLC MemAvailable約201 MiB / swap使用12784 MiBとなった。GPU実行の問題ではなく、初回CUDA buildの並列コンパイルによるRAM不足。ユーザーの「問題時は止まって確認」に従い、自分のコンテナ内のNinjaへSIGINTを送り中断した。既存build成果物とsource変更は保存済み、GPU behavior testはまだ未実行。次の具体案は cmake --build /tmp/ninfer-suspend-build -j4 --target ninfer_model_suspend_test による既存treeからの再開、その後 ctest --test-dir /tmp/ninfer-suspend-build -R ^ninfer_model_suspend_test$ --output-on-failure。ユーザーが並列数4での再開を承認したため、既存treeから ninfer_model_suspend_test のbuildを再開した（WSLC exec session 15614）。既存attention CUDAソースのcompile/ptxasが長時間かかっているが進行中。並列数4ではMemAvailable約14～20 GiB、swap約22 MiBで安定しており、RAM圧迫は再発していない。behavior testが通るまではcommitしない。
 
 ### P5: HTTP、起動option、計測
 
@@ -217,8 +223,8 @@ P3実装（2026-10-02）: opt-inのpersistent/workspaceをVMM化。通常RAMをl
 
 - [ ] 下記検証表を実施し、利用した環境・設定・測定値・未実施項目を本書へ記録する。
 - [ ] `docs/serving.md`、`docs/cli.md`、`docs/maintainer/engine-architecture.md`、関連するmemory/overlay説明を更新する。
-- [ ] OpenCode → tool call → suspend → 画像生成 → 画像生成側のGPU解放 → resume → 画像評価を確認する。
-  orchestratorは既存連携または最小の検証手順を使い、汎用model managerは実装しない。
+- [ ] MCPサーバーの直接呼び出しで、suspend → 画像生成 → 画像生成側のGPU解放 → resume → 画像評価を確認する。
+  ユーザー指示（2026-10-02）により、NInferの実装・単体受入後に別リポジトリ E:\koji\work\20260813\qwen-image-runtime\qwen-image-runtime のSPEC/PLANに従って画像MCPを実装し、その後直接MCP呼出しによる連携受入を行う。汎用model managerは実装しない。OpenCode等のハーネス経由の検証は後日別途判断する。
 
 ## 5. 検証と受入基準
 
@@ -281,3 +287,63 @@ RAM余裕内に収まる見込み。これは3領域の正確なphysical量やsu
    計測は両方を記録し、解放量20 GiB以上を基準案とする。最終受入では他プロセスの占有を分けて判断する。
 
 上記の確認はP0の実機条件を確定するためのもの。overlay対応は合意済みで再確認しない。
+
+### 並列数4での再開後の停止（2026-10-02）
+
+ユーザー承認で ninfer_model_suspend_test のbuildを -j4 で再開し、既存attention CUDAソース8本を含む19/185まで完了。約50分はMemAvailable約14～20 GiB / swap約22 MiBで安定していたが、別コンテナ keen_ozark の起動後に共有メモリ使用量が13632 MiBへ増え、MemAvailableが316 MiBへ急減した。別コンテナとの因果関係は未確定だが、新たなRAM圧迫を確認したため、ユーザーの問題時停止指示に従い自分のコンテナ ninfer-suspend-dev のNinjaへSIGINTを送り中断した。別コンテナには操作していない。build成果物と変更は保持、P4 behavior testは未実行、P4は未commit。次は並列数2へ下げるか、別の負荷が終了してから並列数4で再開するかをユーザーと確認する。再開コマンドは cmake --build /tmp/ninfer-suspend-build -j2 --target ninfer_model_suspend_test（または承認済み並列数4）。完了後 ctest --test-dir /tmp/ninfer-suspend-build -R ^ninfer_model_suspend_test$ --output-on-failure。GPUテスト前には別負荷とGPU使用量を再確認する。
+
+再開指示（2026-10-02）: ユーザーが別コンテナを停止し、通常並列での再開を指示した。WSLC一覧では自分のninfer-suspend-devのみ稼働、MemAvailable 23201 MiBを確認。既存treeで cmake --build /tmp/ninfer-suspend-build -j --target ninfer_model_suspend_test を再開した。実際のRAM圧迫を監視し、問題発生時は停止して確認する。
+
+通常並列での再開結果（2026-10-02）: 別コンテナ停止済み / MemAvailable 23201 MiBから -j で再開したが、cicc/ptxas/cc1plusが36本起動し、約1分でMemAvailableが91 MiBへ減少した（swap22 MiB）。別負荷がなくても無制限並列はWSLC RAM約23.7 GiBに収まらないため、自分のNinjaをSIGINTで中断。P4テストは未実行、変更・完了済みbuild成果物は保持。次は通常並列を -j8 に制限するか、実績のある -j4 を使用するかをユーザーに確認する。
+
+再開承認（2026-10-02）: ユーザーが -j8 を承認。既存 /tmp/ninfer-suspend-build の ninfer_model_suspend_test を並列数8で再開。RAM使用量を監視し、問題時は停止して確認する。
+
+監視頻度の指示（2026-10-02）: ユーザー指示によりRAM/buildの確認は約5分間隔とする。-j8 buildは継続中（exec session 37914）。8本アセンブル時にMemAvailable約2983 MiBまで減ったがswap増加はなく、その後一部CUDAソースが完了してMemAvailable 7943 MiBへ回復。behavior testはまだ未実行。
+
+区切りで停止の指示（2026-10-02）: ユーザーがbuild完了後、現在の作業単位が一区切りついたら一旦停止するよう指示。P4のbuild・関連behavior test・checkpoint commitまで進め、P5/画像MCPへは進まない。image整理について、現在のimage ninfer-vision-audit:latest (ed463cd4ed91) とコンテナ ninfer-suspend-dev を保持するよう回答。build成果物は同コンテナ内 /tmp/ninfer-suspend-build。その他imageは今回のsuspend検証には不要だが、ninfer-all:latest は停止済み northern_kunlun、ninfer-all:ninfer-video は停止済み ninfer-suspend-budget が参照しているため、それらコンテナの要否を確認して整理する。こちらではimage/containerの削除は実施していない。
+
+### 現在の停止地点: ディスク整理のためbuild中断（2026-10-02）
+
+ユーザーが明示的にbuild中断を指示したため、ninfer-suspend-dev 内のNinjaへSIGINTを送り停止した。exec session 37914はexit 1（interrupted by user）。ninja/cicc/ptxas/cc1plusが同コンテナに残っていないことを確認済み。-j8 再開分は10/166まで完了し、w3/w4のattention CUDA群とw5 h16/h24 cachedが完了済み。build成果物はコンテナの書き込み層 /tmp/ninfer-suspend-build に保持。ディスク整理時も ninfer-vision-audit:latest と既存コンテナ ninfer-suspend-dev は削除せず保持する（コンテナ停止・WSL shutdownは可能）。こちらではコンテナ停止、image削除、WSL shutdownは実施していない。
+
+P4実装は未commit、GPU behavior test未実行。C++構文検証とdiffレビューの既存結果は上記P4欄。次回はユーザーの再開指示を待ち、コンテナが停止していれば wslc start ninfer-suspend-dev、その後 wslc exec ninfer-suspend-dev cmake --build /tmp/ninfer-suspend-build -j8 --target ninfer_model_suspend_test を実行する。RAM/build監視はユーザー指定の約5分間隔。build完了後にGPU利用状況を確認して ctest --test-dir /tmp/ninfer-suspend-build -R ^ninfer_model_suspend_test$ --output-on-failure を実行し、関連checkを通してP4 checkpoint commitを作成する。ユーザーの『区切りがついたら一旦停止』指示は継続して有効なので、このcommit後はP5/画像MCPへ進まず停止する。
+
+### 新build imageからの再開準備と確認待ち（2026-10-02）
+
+ユーザーが全WSLCコンテナを削除し、masterから tmp/dockerfile-ninfer-build で ninfer-all:build、製品Dockerfileで ninfer-all:latest を作成した。ninfer-suspendブランチがcleanであることとstash名 20261012_1110を確認し、同ブランチで stash@{0} をpopして全18ファイルを競合なく復元した（stashはdrop済み）。以前の /tmp/ninfer-suspend-build とコンテナ成果物はコンテナ削除により失われた。
+
+ユーザーは新開発DockerfileのFROMを ninfer-all:build にし、masterの生成物を使う差分buildを指定。image d58c3ccbe086 を一時コンテナのlsで確認したところ /build は存在せず、/out/ninfer と /out/ninfer-serve のみ存在した。tmp/dockerfile-ninfer-build は /build を --mount=type=cache,id=ninfer-build で使用しているため、CMakeCache・object・static library はimageには含まれない。この前提の相違を報告し、問題時停止指示に従い確認待ち。次の具体案は FROM ninfer-all:build の開発Dockerfileで同じBuildKit cacheをmountし、その内容を /build へコピーしてimageの永続layerへ取り込むこと。baseline cacheが利用できることを確認してから既存source/build pathを維持して差分同期・reconfigure・-j8 targeted buildを行う。まだ新Dockerfile作成/build、P4 GPU behavior test、P4 commitは未実施。監視は約5分間隔、P4 checkpoint後は区切りで停止する指示を維持する。
+
+### BuildKit cache取り込みによる開発環境再開（2026-10-02）
+
+ユーザーがcacheを開発imageへ取り込む構成を承認。tools/suspend-dev/Dockerfile は FROM ninfer-all:build とし、id=ninfer-build のcache内configurationのSHA256で既存treeを選び、sourceとそのtreeのみを同じ /build パスへコピーする。Python 3.12.3を追加した開発image ninfer-suspend:dev (1a4eb2d469b5) のbuild成功。新コンテナ ninfer-suspend-dev (a6ce6aca37c0) を起動し、repoを /workspace:ro へmountした。prepare-build.sh は内容比較rsyncで未変更sourceのmtimeを保ち、既存tree /build/57382beee819500f31a1c6917b3f94a49d4c1f45c1915ebd70acfb6b0d97d4e3 でBUILD_TESTINGをONにする。初回の同期除外がnested models source/testも除外していた不備は、除外patternをルート限定に修正して解消。configureとshell構文検証成功、suspend test登録をdry-runで確認した。
+
+差分targetは142件。Ninja explainにより共通 include/ninfer/types.h などの変更がCUDAを含むdependent targetの再compileを必要とすることを確認。全件の新規buildではないが、長いattention CUDAコンパイルは必要。build-test.sh で -j8 の ninfer_model_suspend_test と影響したloading-test objectをbuild中。ログ /tmp/ninfer-suspend-build.log、監視は約5分間隔。P4 GPU behavior testとcheckpoint commitはまだ未実施。次はbuild成功後にGPU利用確認とCTestを行い、P4をcommitして区切りで停止する。
+
+### ユーザー再呼出し待ち: buildを継続して監視終了（2026-10-02）
+
+ユーザーが『いったん止めて、半日後に呼び出す』運用を希望したため、agentの監視・作業を終了する。コンテナ内buildは継続する。自動再開・自動通知は設定していない。ユーザーの次の呼出しで再開する。
+
+現在ブランチninfer-suspend、stash 20261012_1110はpop済み。P4実装と tools/suspend-dev/ 開発環境は未commit。開発コンテナ ninfer-suspend-dev、image ninfer-suspend:dev (FROM ninfer-all:build)。build directory /build/57382beee819500f31a1c6917b3f94a49d4c1f45c1915ebd70acfb6b0d97d4e3、buildログ /tmp/ninfer-suspend-build.log。build-test.sh が -j8 で ninfer_model_suspend_test と ninfer_qwen3_5_loading_test objectをbuildしている（exec session 62066）。sleep infinity のコンテナ自体はbuild終了後も稼働する。コンテナ停止・削除やWSL shutdownはbuildを中断するため、完了待ち中は稼働を維持する。
+
+再開時はまず wslc exec ninfer-suspend-dev ps -C ninja -o pid,etimes,args とログ末尾を確認する。ninjaがまだ動いていれば既存buildへ重複起動しない。終了済みならログにFAILED/エラーがないか、対象 executableが存在するかを確認する。成功後はGPU使用状況を確認して ctest --test-dir /build/57382beee819500f31a1c6917b3f94a49d4c1f45c1915ebd70acfb6b0d97d4e3 -R ^ninfer_model_suspend_test$ --output-on-failure を実行する。必要な関連checks後、PLAN/SPEC/docsと全diffをレビューしてP4 checkpoint commitを作り、区切りで停止する。エラー・判断が必要な疑問は非同期Askではなく停止して確認する。
+
+### P4 checkpoint検証完了とP5への再開地点（2026-10-02）
+
+最新のユーザー指示は「自力で解決できる問題は修正して続行、ユーザー判断が必須の場合だけ停止」。以降のfixtureエラーは自律的に修正した。MRoPE、連続parentのprojection配置、推論用tokenizer設定、KV容量を対応契約へ揃えた。極小projection形状とattention-onlyのStateImage構成は既存実行経路に対応していないため、製品演算を拡張せず、supported dense geometryのattention/GDN各1層、hidden5120、FFN17408、vocab272、BF16/row-scaled FP8の生成artifactへ変更した。重みはゼロなので、生成一致は状態遷移のsmoke evidenceであり実モデル数値品質の根拠ではない。
+
+開発コンテナninfer-suspend-dev、WSLC CUDA13.1/GCC13/RTX3090で build-test.sh の -j8 targeted buildが成功（ninfer_model_suspend_test executable、変更したninfer_qwen3_5_loading_test object）。ctest --test-dir /build/57382beee819500f31a1c6917b3f94a49d4c1f45c1915ebd70acfb6b0d97d4e3 -R '^ninfer_model_suspend_test$' --output-on-failure が1/1 PASS、14.48秒。disabled/非対応設定、active+queued100token要求を取消さない即時Busy、10回fresh-backing復帰後の3token一致、非READY zero-output拒否、2thread各20回管理競合、source変更のERRORと診断/snapshot保持、suspended/error destructorを確認した。関連diffをレビューしgit diff --check成功。helper shell構文検査と開発image build/configureも成功済み。
+
+P4実装はtyped public APIとEngineCore state/admission排他として完了。P3の実continuation/Vision overlay再実行、P0 arena外allocation/workspace監査、実モデル20GiB/48GiB/100cycle受入は未完了でP6に残す。Windows nativeと全test suiteは未実行（今回の検証はWSLCの対象targetに限定）。timingのmap/read/H2D分離はP5。次はP4 checkpoint commit後、P5のCLI flag、HTTP management/status routes、GenerationService受付・media/zero-output gateとprotocol error、schema/HTTP testsを実装する。既存コンテナとbuild treeを保持し、prepare-build.sh完了後に必要targetを順次buildする。NInfer受入完了前に画像MCP実装へ進まない。
+
+### GPU test: synthetic fixtureのMRoPE設定で停止（2026-10-02）
+
+ユーザーの再開指示後、testのVMM能力照会をcuda.h、cuInit、cuDeviceGetAttributeへ修正した。prepare-build.shが完了してからbuild-test.shを実行し、ninfer_model_suspend_test executableと関連loading-test objectのbuildは成功。GPUは13 MiB使用・24314 MiB空き。記録済みbuild directoryで ctest -R '^ninfer_model_suspend_test$' --output-on-failure を実行したが、1.33秒で Qwen3.5 config: MRoPE sections exceed interleaved axis ranges により失敗。suspend/resume動作には未到達。head_dim=64、partial_rotary_factor=0.5なのでrotary pairは16個で、fixtureの {8,8,0} はconfig.cppのinterleaved軸配分に一致しない。各pairを3軸へ配分する {6,5,5} が有効な修正案。production設定検証の変更は不要。新たな問題があれば停止する指示に従い、fixture修正前に停止した。P4未commit、次はこのfixture修正の確認後に差分同期・短いtest build・CTestを行う。
+
+### 再build: VMM能力照会APIのcompile errorで停止（2026-10-02）
+
+ユーザー承認後、suspend test targetへninfer_coreを追加し、prepare-build.shの同期・configureが完了した。configure完了前にbuildを開始したため旧設定で一度失敗したが、完了後に再実行しCUDA include不足は解消した。production static libraryのlinkは成功。残るtest compileで cudaDevAttrVirtualMemoryManagementSupported が未定義となった。インストール済みCUDAヘッダーで確認したところ、VMM能力照会はDriver APIの CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED を使う。既存 tests/test_vmm_suspend.cu とCore poolも cuDeviceGetAttribute を使用している。次の修正案は test_model_suspend.cpp に cuda.h を明示includeし、cuInit(0) と cuDeviceGetAttribute によるVMM照会へ変更すること。問題時停止指示に従い、この修正前に確認待ち。GPU behavior testとP4 commitは未実施。build directoryと再開コマンドは上記と同じで、CUDA objectを再compileする必要はない。
+
+### build終了確認: test target依存不足で停止（2026-10-02）
+
+ユーザー再呼出しで確認したところNinjaは終了、ログ末尾は subcommand failed。失敗箇所は tests/models/qwen3_5/test_model_suspend.cpp のcompileのみで、runtime/engine/model_instance.h から core/device.h をincludeした際に cuda_runtime.h が見つからない。test targetの LIBRARIES は ninfer_engine ninfer::json のみで、内部Coreヘッダーを使う既存testが指定する ninfer_core が不足している。修正案は tests/models/qwen3_5/tests.cmake の ninfer_model_suspend_test の LIBRARIES へ ninfer_core を追加すること。CUDA/headerの問題はtest依存設定であり、production実装のcompile errorではない。GPUは13 MiB使用で空きあり。GPU behavior testはまだ未実行、P4は未commit。ユーザーの問題時停止指示に従い修正・再build前に確認待ち。既存の完了済みCUDA objectを保持して、承認後にprepare-build.shで差分同期・configure、build-test.shで残りのcompile/link、CTestを実行する。

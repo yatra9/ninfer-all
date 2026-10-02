@@ -449,11 +449,20 @@ void HybridPrefixCache::publish_write(PendingWrite& write) {
 }
 
 void HybridPrefixCache::poll() {
+    poll_impl(false);
+}
+void HybridPrefixCache::poll_for_residency() {
+    poll_impl(true);
+}
+void HybridPrefixCache::poll_impl(bool residency) {
     // Every write shares the transfer stream and every restore the restore stream, so each list
     // completes in submission order.
     while (!pending_.empty()) {
         const cudaError_t status = cudaEventQuery(pending_.front().done);
         if (status == cudaErrorNotReady) { break; }
+        if (residency && status != cudaSuccess) {
+            throw std::runtime_error(std::string("query context Host write: ") + cudaGetErrorString(status));
+        }
         CUDA_CHECK(status);
         publish_write(pending_.front());
         pending_.pop_front();
@@ -461,6 +470,9 @@ void HybridPrefixCache::poll() {
     while (!landing_.empty()) {
         const cudaError_t status = cudaEventQuery(landing_.front().layers.back());
         if (status == cudaErrorNotReady) { break; }
+        if (residency && status != cudaSuccess) {
+            throw std::runtime_error(std::string("query context landing restore: ") + cudaGetErrorString(status));
+        }
         CUDA_CHECK(status);
         finish_landing(landing_.front());
         landing_.pop_front();

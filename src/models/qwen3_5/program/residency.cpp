@@ -32,6 +32,9 @@ bool detail::ProgramImpl::residency_idle() const {
             return false;
         }
     }
+    // Completed background writes can remain unpublished while the worker sleeps idle.
+    // Publish only completions already available; never wait for pending transfers.
+    if (hybrid_) { hybrid_->poll_for_residency(); }
     if (hybrid_ && (hybrid_->restore_open() || hybrid_->restore_pending() ||
                     hybrid_->transfers_pending())) { return false; }
     for (std::size_t rank = 0; rank < compute_streams.size(); ++rank) {
@@ -97,4 +100,5 @@ void Program::snapshot_persistent() { impl_->snapshot_persistent(); }
 void Program::detach_storage() { impl_->detach_storage(); }
 void Program::restore_storage() { impl_->restore_storage(); }
 void Program::release_snapshot() noexcept { impl_->residency_snapshot.reset(); }
+void Program::residency_error() noexcept { impl_->residency_storage_intact = false; }
 } // namespace ninfer::models::qwen3_5

@@ -19,6 +19,39 @@ namespace ninfer {
 
 using TokenId = std::int32_t;
 
+enum class ModelResidencyState : std::uint8_t { Ready, Suspending, Suspended, Resuming, Error };
+enum class ModelResidencyErrorKind : std::uint8_t { Busy, Unsupported, Failure };
+class ModelResidencyError final : public std::runtime_error {
+public:
+    ModelResidencyError(ModelResidencyErrorKind kind, std::string message)
+        : std::runtime_error(std::move(message)), kind_(kind) {}
+    [[nodiscard]] ModelResidencyErrorKind kind() const noexcept { return kind_; }
+private:
+    ModelResidencyErrorKind kind_;
+};
+struct ModelResidencyStatus {
+    bool enabled = false;
+    ModelResidencyState state = ModelResidencyState::Ready;
+    std::size_t weight_device_bytes = 0;
+    std::size_t persistent_device_bytes = 0;
+    std::size_t workspace_device_bytes = 0;
+    // Known NInfer backing only. CUDA context/graph/driver allocations are not estimated here.
+    std::size_t retained_device_bytes = 0;
+    std::size_t persistent_snapshot_bytes = 0;
+    std::size_t released_device_bytes = 0;
+    std::size_t mapped_device_bytes = 0;
+    std::uint64_t weight_artifact_read_bytes = 0;
+    std::uint64_t weight_h2d_bytes = 0;
+    double last_suspend_seconds = 0;
+    double last_resume_seconds = 0;
+    double persistent_snapshot_d2h_seconds = 0;
+    double persistent_snapshot_h2d_seconds = 0;
+    double weight_restore_seconds = 0;
+    double vmm_unmap_release_seconds = 0;
+    double vmm_map_seconds = 0;
+    std::string last_error;
+};
+
 inline constexpr std::uint32_t kMaximumConcurrency               = 8;
 inline constexpr std::size_t kMaximumContextCacheSessionKeyBytes = 256;
 inline constexpr std::size_t kMaximumExplicitPromptCacheMarkers  = 4;
