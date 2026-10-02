@@ -7,8 +7,37 @@
 #include <chrono>
 #include <atomic>
 #include <barrier>
+#include <future>
 #include <iostream>
 #include <thread>
+#include <utility>
+
+#ifdef NINFER_TEST_WRAP_SAMPLING
+namespace {
+struct SubmissionGate {
+    std::promise<void> reached;
+    std::promise<void> release;
+};
+thread_local SubmissionGate* submission_gate = nullptr;
+}
+extern "C" ninfer::ResolvedSamplingParameters real_sampling(
+    const ninfer::ModelSamplingDefaults&, ninfer::SamplingMode, const ninfer::SamplingOverrides&)
+    asm("__real__ZN6ninfer7runtime16resolve_samplingERKNS_21ModelSamplingDefaultsENS_12SamplingModeERKNS_17SamplingOverridesE");
+extern "C" ninfer::ResolvedSamplingParameters wrapped_sampling(
+    const ninfer::ModelSamplingDefaults&, ninfer::SamplingMode, const ninfer::SamplingOverrides&)
+    asm("__wrap__ZN6ninfer7runtime16resolve_samplingERKNS_21ModelSamplingDefaultsENS_12SamplingModeERKNS_17SamplingOverridesE");
+extern "C" ninfer::ResolvedSamplingParameters wrapped_sampling(
+    const ninfer::ModelSamplingDefaults& defaults, ninfer::SamplingMode mode,
+    const ninfer::SamplingOverrides& overrides) {
+    auto result = real_sampling(defaults, mode, overrides);
+    if (auto* gate = std::exchange(submission_gate, nullptr)) {
+        auto release = gate->release.get_future();
+        gate->reached.set_value();
+        release.wait();
+    }
+    return result;
+}
+#endif
 
 namespace {
 using namespace ninfer;
@@ -132,6 +161,42 @@ void run() {
         }
         immediate_worker.join();
         require(!immediate_failed, "CPU-only admission race failed");
+#ifdef NINFER_TEST_WRAP_SAMPLING
+        // Pause this submission after its initial availability check but before final admission.
+        // Link wrapping is test-only; no hook or scheduling policy enters the product.
+        SubmissionGate gate;
+        auto reached = gate.reached.get_future();
+        auto prompt = engine.prepare_tokens({65, 66});
+        bool rejected = false;
+        std::exception_ptr submission_error;
+        std::jthread paused_submit([&, prompt = std::move(prompt)]() mutable {
+            submission_gate = &gate;
+            try {
+                RequestOptions zero;
+                zero.execution.requested_output_tokens = 0;
+                (void)engine.submit(std::move(prompt), zero);
+            } catch (const RequestError& error) {
+                rejected = error.kind() == RequestErrorKind::Unavailable;
+            } catch (...) { submission_error = std::current_exception(); }
+            submission_gate = nullptr;
+        });
+        try {
+            require(reached.wait_for(std::chrono::seconds(10)) == std::future_status::ready,
+                    "submission did not reach the test synchronization point");
+            require(engine.suspend().state == ModelResidencyState::Suspended,
+                    "suspend did not finish before final admission");
+        } catch (...) {
+            gate.release.set_value();
+            paused_submit.join();
+            throw;
+        }
+        gate.release.set_value();
+        paused_submit.join();
+        if (submission_error) { std::rethrow_exception(submission_error); }
+        require(rejected, "zero-output submission bypassed final residency admission");
+        (void)engine.resume();
+        std::cout << "PASS deterministic zero-output admission rejection\n";
+#endif
         (void)engine.suspend();
         const auto timestamp = std::filesystem::last_write_time(fixture.file.entry);
         std::filesystem::last_write_time(fixture.file.entry, timestamp + std::chrono::seconds(10));

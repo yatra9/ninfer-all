@@ -37,6 +37,9 @@ opt-in/disabled handling, active and queued request rejection, repeated fresh-ba
 concurrent management/status calls, zero-output submission rejection while suspended and
 1000 zero-output submissions racing ten suspend/resume cycles,
 immutable-source failure with retained diagnostics/snapshot, and suspended/error destruction.
+On Linux, test-only link wrapping pauses a zero-output submission after its initial availability
+check. Suspend completes before that submission continues, so final admission must reject it.
+This deterministically covers the race; removing final admission makes the test fail.
 It is standalone for targeted GPU acceptance without rebuilding the complete test bundle.
 `ninfer_model_residency_http_test` uses the same generated artifact with a real HTTP listener
 to check authentication, public aliases, management body validation, service response reservations,

@@ -434,3 +434,13 @@ Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages
 - チェック: pool failure 18ケースPASS（最終0.33秒）、Engine受付競合/通常生成/遷移/障害/破棄PASS（最終18.43秒）、HTTP管理API PASS（2.82秒）。全差分（新規testを含む）レビュー、git diff --check実施。
 - 未実施: 全suite、Windows native、100cycle実モデルの再実行。既存100cycle報告は保存済みであり今回再実行した結果ではない。Coreの旧2テストは共有ninfer_testsがこの開発treeに未生成のため監査時にNot Run、新規standaloneで両poolの正常attachと失敗cleanupを検証した。今回の修正は数値演算・snapshot形式・正常upload経路を変更しない。
 - 残作業: このNInfer監査修正の範囲ではなし。画像MCPは別作業。既存開発container/build treeと受入モデルvolumeは保持し、必要なら末尾記載のbuild pathと各standalone CTest名で再検証できる。
+
+### 再監査: ゼロ出力受付の決定的な回帰検証（2026-10-02）
+
+- 指摘: 1000件の並行submitは成功/Unavailableの双方を許容し、初回availability確認から最終admissionまでの間にsuspendが完了する順序を保証していなかった。
+- 修正: Linuxのninfer_model_suspend_testだけにlinker --wrapを設定し、既存runtime::resolve_sampling(ModelSamplingDefaults, SamplingMode, SamplingOverrides)の処理後で、指定したsubmitスレッドをpromise/futureで停止する。初回is_availableはREADYで通過済み、その間にメインスレッドがsuspendを完了し、submitを再開してUnavailableによる拒否を必須とする。同期点到達は10秒timeout、例外時も停止スレッドを解放・joinする。製品コードや公開APIへテストフックは追加していない。従来のstress試験も維持する。
+- 検証: ninfer-suspend-dev / WSLC Linux / RTX3090 / CUDA13.1 / GCC13、prepare-build.sh後、ninfer_model_suspend_testを-j8で差分build/link成功。復元済み製品コードで同実行ファイルの全ケースPASS、追加caseは「PASS deterministic zero-output admission rejection」を出力。
+- Mutation検証: hostリポジトリを変更せず、コンテナ内 /build/src/src/runtime/engine/engine.cppのゼロ出力最終accept_immediate_submission呼出しだけを一時的に迂回し、同targetをrebuild。テストはexit1、理由「zero-output submission bypassed final residency admission」で必ず失敗した。finallyで元のsource bytesを復元し、再build後の同testはexit0/PASS。通常版とmutation版の違いをテストが検出することを確認済み。
+- 記録: /tmp/ninfer-suspend-admission-mutation-build.log、/tmp/ninfer-suspend-admission-mutation-test.log、/tmp/ninfer-suspend-admission-restored-build.log。ローカルの再現補助は .cache/suspend-admission-mutation.py（検証用、commit対象外）。tests READMEへ決定的な実行順と検証範囲を追記。全diffレビュー・git diff --check実施。
+- 制限: linker wrapを使う決定的caseはLinux専用。Windows native/全suite/実モデル100cycleは今回未実施（製品コード変更なし、テストだけの修正）。SPECの受付契約は変更不要。画像MCP連携は引き続き対象外。
+- 残作業: 今回の再監査指摘は解消済み、NInfer suspendの修正範囲に未完了項目なし。再検証は ninfer_model_suspend_test targetをbuildし、その同名CTestまたは実行ファイルを実行する。既存container/build tree/model volumeは保持。
