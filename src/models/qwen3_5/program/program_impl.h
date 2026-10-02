@@ -801,6 +801,8 @@ public:
     // Ordinary RAM, allocated only for suspension. Capacity bytes, including unused storage.
     std::unique_ptr<std::byte[]> residency_snapshot;
     bool residency_storage_intact = true;
+    // Successful idle detach permits Host-only persistence at shutdown; ERROR revokes it.
+    bool residency_host_cache_quiescent = false;
     [[nodiscard]] bool residency_idle() const;
     void snapshot_persistent();
     void detach_storage();

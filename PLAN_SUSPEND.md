@@ -457,3 +457,13 @@ Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages
 - SPECのpageable H2D完了・同期失敗とtranscode-only計測契約、serving説明、tests READMEを更新した。既存100cycleの計測は修正前の値であり、新しい同期を含めた実モデル性能値としては扱わない。
 - 未実施: Windows native、全suite、実モデル100cycleの再実行、新規transcode完了同期のmulti-GPU実機試験。新規故障/計測testsはLinux linker wrapを使用する。実モデル受入結果は従来記録を保持し、画像MCP連携は引き続き対象外。
 - 残作業: 今回の2指摘の修正範囲に未完了項目なし。再検証は ninfer_suspend_restore_completion_test、ninfer_suspend_upload_timing_test、ninfer_model_suspend_test、ninfer_model_residency_http_testをbuildし、同名CTestを実行する。既存container/build tree/native model volumeは保持。
+
+### 再監査修正: Suspended終了時のHybrid Hostキャッシュ保存（2026-10-02）
+
+- 指摘: fail_all_cleanupのstorage未復元時の早期returnにより、正常なSUSPENDED終了でもHybrid Hostキャッシュの永続化が省略された。監査fixtureではReady終了のみ3.8MiB保存、Suspended終了ではファイルなしを再現した。
+- 修正: Programの成功したidle detachをHost-only保存可能として記録し、正常shutdownではCPU indexとHost slabsを保存する。GPU同期/drain/reset/spill、backing再map、暗黙resumeは行わない。detach途中の失敗、Program restore開始、residency ERRORでは保存資格を無効にする。Ready終了の従来同期・drainは維持する。
+- 回帰テスト: ninfer_model_suspend_testへHybrid/Host64MiB/2層fixtureのReady終了、Suspended終了、source変更によるresume失敗/ERROR終了の3ケースを追加。Host snapshot生成、suspend後のDevice backing 0、正常終了後の非空保存ファイル、次Engineでblocks/snapshots復元、生成token完全一致、ERROR終了時の保存省略を検証する。
+- 検証: 既存ninfer-suspend-dev、WSLC Linux、RTX3090、CUDA13.1/GCC13。prepare-build.shと-j8の増分buildでEngine test成功。同名CTest全ケースPASS（20.90秒）。製品ninfer/ninfer-serveと関連HTTP/completion/upload testの増分build/linkも成功。completion CTest PASS（5.98秒）、upload PASS（0.25秒）、HTTP PASS（2.55秒）。build logは /tmp/ninfer-hybrid-shutdown-fix-build.log と /tmp/ninfer-hybrid-shutdown-products-build.log。
+- SPEC_SUSPEND.md、serving、Engine architecture、tests READMEへ正常Suspended保存とERROR除外を反映。全差分レビュー・git diff --checkを実施。
+- 未実施: Windows native、全suite、実モデル100cycleの再実行。今回の保存は既存Hybrid保存形式を使用し、数値演算・weight upload・snapshot復元形式は変更しない。画像MCP連携は対象外。
+- 次の具体的作業: もう1件の監査指摘、model-idがdeployment/residencyの場合に既存GET model detailが管理用GETと衝突する不具合を修正する。完全一致のモデル詳細と管理suffixを識別し、suspend有効/無効の双方でHTTP回帰テストを追加する。このHybrid修正単位をcommitしてから開始する。

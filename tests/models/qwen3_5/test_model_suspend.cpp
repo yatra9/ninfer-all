@@ -61,6 +61,69 @@ void expect_residency_error(Engine& engine, ModelResidencyErrorKind expected) {
     catch (const ModelResidencyError& error) { require(error.kind() == expected, "wrong residency error"); return; }
     throw std::runtime_error("expected residency error");
 }
+void check_hybrid_shutdown(const ModelFixture& fixture) {
+    const std::vector<TokenId> prompt(130, 65);
+    RequestOptions request;
+    request.execution.requested_output_tokens = 3;
+    request.stop.include_model_defaults = false;
+    for (const int mode : {0, 1, 2}) { // Ready, Suspended, failed resume.
+        auto configured = options(fixture, true);
+        configured.max_context = 256;
+        configured.kv_capacity = KvCapacityPolicy::explicit_capacity(512);
+        configured.context_cache.mode = ContextCacheMode::Hybrid;
+        configured.context_cache.host_cache_budget_bytes = 64ULL << 20;
+        const auto file = fixture.file.directory / ("hybrid-shutdown-" + std::to_string(mode) + ".cache");
+        configured.context_cache.hybrid.persistent_file = file;
+        configured.context_cache.hybrid.persistent_identity = "suspend-shutdown-test";
+        std::vector<TokenId> reference;
+        {
+            Engine engine(configured);
+            reference = engine.generate(engine.prepare_tokens(prompt), request).generated_token_ids;
+            require(reference.size() == 3 && engine.runtime_stats().hybrid_host_image_writes > 0,
+                    "hybrid shutdown fixture did not produce Host snapshots");
+            if (mode != 0) {
+                bool suspended = false;
+                for (int attempt = 0; attempt < 200 && !suspended; ++attempt) {
+                    try {
+                        const auto status = engine.suspend();
+                        require(status.state == ModelResidencyState::Suspended && status.retained_device_bytes == 0,
+                                "hybrid shutdown fixture retained Device backing");
+                        suspended = true;
+                    } catch (const ModelResidencyError& error) {
+                        if (error.kind() != ModelResidencyErrorKind::Busy) { throw; }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    }
+                }
+                require(suspended, "hybrid Host writes did not become idle");
+            }
+            if (mode == 2) {
+                const auto timestamp = std::filesystem::last_write_time(fixture.file.entry);
+                std::filesystem::last_write_time(fixture.file.entry, timestamp + std::chrono::seconds(10));
+                try {
+                    rejects<ModelResidencyError>([&] { (void)engine.resume(); }, "changed hybrid source was accepted");
+                } catch (...) {
+                    std::filesystem::last_write_time(fixture.file.entry, timestamp);
+                    throw;
+                }
+                std::filesystem::last_write_time(fixture.file.entry, timestamp);
+                require(engine.residency().state == ModelResidencyState::Error, "hybrid resume failure lost ERROR");
+            }
+        }
+        if (mode == 2) {
+            require(!std::filesystem::exists(file), "ERROR shutdown persisted potentially invalid cache");
+            continue;
+        }
+        require(std::filesystem::exists(file) && std::filesystem::file_size(file) > 0,
+                "clean hybrid shutdown did not persist Host cache");
+        Engine loader(configured);
+        const auto summary = loader.load_summary();
+        require(summary.prefix_cache.restored && summary.prefix_cache.snapshots > 0 && summary.prefix_cache.blocks > 0,
+                "hybrid Host snapshots were not restored after shutdown");
+        require(loader.generate(loader.prepare_tokens(prompt), request).generated_token_ids == reference,
+                "persisted hybrid cache changed generation");
+    }
+    std::cout << "PASS hybrid Ready/Suspended persistence and ERROR exclusion\n";
+}
 void run() {
     EngineOptions unsupported;
     unsupported.enable_model_suspend = true;
@@ -211,6 +274,7 @@ void run() {
         Engine engine(options(fixture, true));
         (void)engine.suspend(); // Destruction must not implicitly restore or touch unmapped state.
     }
+    check_hybrid_shutdown(fixture);
 }
 }
 int main() {

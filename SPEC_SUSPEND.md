@@ -728,6 +728,13 @@ partial map 状態を安全に cleanup し、state = ERROR とする。poolの�
 
 PoC / debug build では resume 後に小さな validation inference / graph replay test を行えるようにする。production では optional とする。
 
+### 16.6 Suspended状態での正常終了
+
+正常にSUSPENDEDへ遷移したEngineの終了でも、設定済みHybrid prefix cacheのHost tierを
+既存の永続化ファイルへ保存する。suspend時点でHost書込み完了とtransfer idleを確認済みのため、
+保存はHost slabsとCPU indexのみを読み、GPU backingの復元・GPU reset/spill・暗黙resumeを行わない。
+detachまたはresumeに失敗してERRORになった場合は、この正常終了保存を行わない。
+
 ## 17. 起動オプション案
 
 v1 で必須なのは以下だけでよい。

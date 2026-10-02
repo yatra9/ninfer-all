@@ -70,9 +70,11 @@ void detail::ProgramImpl::detach_storage() {
     if (!residency_snapshot) { throw std::logic_error("persistent snapshot is missing"); }
     // Set before the first physical change, including partial detach failures.
     residency_storage_intact = false;
+    residency_host_cache_quiescent = false;
     if (kv_arena) { kv_arena->detach_backing(); }
     else { persistent.detach_backing(); }
     workspace_storage.detach_backing();
+    residency_host_cache_quiescent = true;
 }
 
 Program::StorageRestoreTiming detail::ProgramImpl::restore_storage() {
@@ -80,6 +82,7 @@ Program::StorageRestoreTiming detail::ProgramImpl::restore_storage() {
         throw std::logic_error("Program storage is not suspended");
     }
     using Clock = std::chrono::steady_clock;
+    residency_host_cache_quiescent = false;
     const auto elapsed = [](Clock::time_point start) {
         return std::chrono::duration<double>(Clock::now() - start).count();
     };
@@ -116,5 +119,8 @@ void Program::snapshot_persistent() { impl_->snapshot_persistent(); }
 void Program::detach_storage() { impl_->detach_storage(); }
 Program::StorageRestoreTiming Program::restore_storage() { return impl_->restore_storage(); }
 void Program::release_snapshot() noexcept { impl_->residency_snapshot.reset(); }
-void Program::residency_error() noexcept { impl_->residency_storage_intact = false; }
+void Program::residency_error() noexcept {
+    impl_->residency_storage_intact = false;
+    impl_->residency_host_cache_quiescent = false;
+}
 } // namespace ninfer::models::qwen3_5

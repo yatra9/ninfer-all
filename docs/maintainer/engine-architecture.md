@@ -245,6 +245,8 @@ Engine 的 `suspend()`、`resume()` 与 `residency()` 是 residency 管理入口
 outstanding reservation、pending 或 Program 忙时立即失败，不取消或清空请求。传输期间不持有 queue lock；
 状态查询只读已发布的 CPU snapshot。非 READY 状态拒绝 submit（包括零输出立即完成），worker 不启动
 Device 操作。shutdown 与 residency 操作串行，失败后保持 ERROR、诊断与 snapshot，禁止隐式 resume。
+正常 SUSPENDED shutdown 仍保存已配置的 Hybrid Host prefix cache。成功 detach 保留 Host-only 保存资格，
+restore 开始或 residency ERROR 撤销资格；保存只读取已完成写入的 Host slabs 和 CPU index，不访问 GPU backing。
 
 GenerationService 在同一短 capacity lock 下协调 admission reservation 与管理操作入口，
 因此尚在 media acquisition、token counting 或 response lifetime 的请求也返回 Busy。
