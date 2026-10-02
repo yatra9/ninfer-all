@@ -70,3 +70,50 @@ each cycle; `complete: true` marks completion. Process RAM is not total host RAM
 and output comparison does not independently prove raw token-vector equality.
 Vision overlay execution, workspace poisoning, and fault tests remain separate
 acceptance tasks in `PLAN_SUSPEND.md`.
+## Exact tokens, overlay loans and failures
+
+Build the standalone `ninfer_qwen3_5_suspend_real_test` target in the existing
+incremental tree. Supply an explicit artifact, PNG and KV capacity:
+
+```sh
+/acceptance/suspend-real /models/Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer /acceptance/colors.png 163840
+```
+
+The executable runs three text/Vision comparisons of exact generated token IDs.
+Prefix reuse is disabled so an image frontier cannot bypass Vision execution.
+A small KV capacity such as 2048 selects the existing weight-tail fallback when
+one planned Vision window cannot fit in the lendable KV prefix. The actual
+`overlay` and `exclusive` counters must confirm the route; capacity alone is
+not evidence of route execution. With the optional `cache` argument, compare the
+same cached frontier before and after suspend. A cold-versus-cached comparison
+is reported separately and is not used as the restoration oracle. The optional
+control argument performs only this cold/cached comparison with model suspend
+disabled, to distinguish an existing execution-path difference from restoration.
+
+Compile the acceptance-only probe and separate memory borrower:
+
+```sh
+g++ -shared -fPIC -O2 -std=c++20 -I/usr/local/cuda/include /acceptance/backing-probe.cpp -o /acceptance/backing-probe.so -ldl
+nvcc -O2 -arch=sm_86 /acceptance/gpu-borrow.cu -o /acceptance/gpu-borrow
+```
+
+Set `LD_PRELOAD=/acceptance/graph-trace.so:/acceptance/backing-probe.so`,
+`NINFER_GRAPH_TRACE` to a fresh file, and `NINFER_WORKSPACE_BYTES` to the measured
+physical workspace size (218103808 on the accepted 160K configuration). The
+probe fills every newly attached workspace backing with a different byte value;
+initial backing uses the normal initialization. Verify poison records occurred,
+exact token comparisons pass and Graph capture/instantiate do not increase.
+`NINFER_BORROW_COMMAND=/acceptance/gpu-borrow` also runs a separate process while
+the Engine is suspended: it allocates, fills, verifies and frees 20 GiB.
+
+For one-shot failures, use `LD_PRELOAD=/acceptance/backing-probe.so` and set
+`NINFER_COPY_FAILURE` to the final argument: `host`, `d2h`, `h2d`, `unmap`,
+`release` or `access`. The test configures full-persistent and workspace sizes
+after startup, before transition. Host/copy failures target the exact persistent
+capacity; unmap/access target the physical workspace extent. Release fails the
+first physical release after injection is armed, testing incomplete pool detach.
+These simulated API failures occur before the intercepted operation; cleanup
+can retry because each injection fires once. The test checks Ready after Host
+allocation failure, otherwise Error with inference blocked, preserved diagnostic
+snapshots where available, and normal destruction. It does not simulate a
+permanently lost CUDA context. Keep probes and diagnostics outside product builds.

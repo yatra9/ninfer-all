@@ -22,11 +22,11 @@
   Pythonテストは実行していない。Windows nativeでのbuild/runは未検証。
 - 合意済み: suspendはidle時のみ。既存のVision overlayも対応対象とし、対応を別機能として切り離さない。
 - 合意済み（2026-10-02）: 実機検証はWSLC上のLinuxを優先する。P0 PoCと実モデル受入はこの環境から進める。
-- 現在の作業: P4は02e2be4dにcommit済み。P5 HTTP・CLI flag・サービス受付gate・timing細分化を実装し、対象buildと4関連テストが成功。P5は8e3cdd7cにcommit済み。P6の指定Qwen3.8-27B/MTP3/Vision overlay実機受入を進めている。新開発imageは ninfer-suspend:dev（FROM ninfer-all:build）、コンテナ ninfer-suspend-dev。既存BuildKit cacheを /build へ取り込んだ差分buildを使用する。正確なbuild pathと再開手順は末尾の最新検証欄参照。
-  P0の各arena正確容量・physical量とproduction workspace監査は継続中。予備実測用の
+- 現在の作業: P4は02e2be4dにcommit済み。P5 HTTP・CLI flag・サービス受付gate・timing細分化を実装し、対象buildと4関連テストが成功。P5は8e3cdd7cにcommit済み。P6の指定Qwen3.8-27B/MTP3/Vision overlay単体受入は完了。P0/P3の残項目も下記証拠で完了した。次は画像MCPの実装・直接テスト、その後P6の連携受入。新開発imageは ninfer-suspend:dev（FROM ninfer-all:build）、コンテナ ninfer-suspend-dev。既存BuildKit cacheを /build へ取り込んだ差分buildを使用する。正確なbuild pathと再開手順は末尾の最新検証欄参照。
+  P0の各arena容量・physical量とproduction workspace監査は完了（末尾のP6結果参照）。予備実測用の
   旧 `ninfer-suspend-budget` コンテナ（host port 18082）はユーザーのディスク整理で削除済み。
 - 各実装段階の完了時に、本節へ変更内容、実施した検証、未検証事項、次の作業を記録する。
-- 未チェック項目は省略・不要と判断した項目ではなく、完了に必須の残作業。P0のarena所有権・workspace依存監査と容量/RAM実測、P3のcontinuation/Vision overlay復帰は未完了である。P4/P5接続を先に進めたのは実Program受入の入口を作るためであり、P0/P3の出口条件を免除したものではない。P6実機受入でこれらの証拠を揃えるまで、NInfer suspend全体を完了と扱わず、画像MCP実装へ進まない。
+- 未チェック項目は省略・不要と判断した項目ではなく、完了に必須の残作業。P0のarena所有権・workspace依存監査と容量/RAM実測、P3のcontinuation/Vision overlay復帰はP6単体受入で完了した。P4/P5接続を先に進めたのは実Program受入の入口を作るためであり、P0/P3の出口条件を免除したものではない。これらの証拠が揃ったためNInfer単体の完了を確定し、画像MCP実装へ進める。最後のMCP連携項目は画像MCP実装後に実施する。
 - 2026-10-02に実装開始と作業単位ごとのcommitを承認済み。AGENTS.mdのsuspend checkpoint規約に従い、
   検証済み単位をcommitして問題がなければ次段階へ継続する。
 
@@ -142,13 +142,13 @@ prepareがGPUへ触れる経路が見つかれば同じ実行権の管理対象�
 
 ### P0: 所有権監査、メモリ予算、Graph PoC
 
-- [ ] weight/persistent/workspaceの所有者、容量、物理確保量、stream、arena外allocationを一覧化する。
-- [ ] workspace内のrequest境界を越える依存を監査する。依存があれば該当領域だけpersistentへ移す等で解消する。
+- [x] weight/persistent/workspaceの所有者、容量、物理確保量、stream、arena外allocationを一覧化する。
+- [x] workspace内のrequest境界を越える依存を監査する。依存があれば該当領域だけpersistentへ移す等で解消する。
   decode graph、MTP/DFlash、Vision bridge、context transfer scratchを対象とする。
 - [x] 既存VMMテストを拡張または専用テストを追加し、capture/instantiate後にD2H、unmap、release、
   新規create、same-VA map、H2D、同一GraphExec replayを1000回以上反復する。
 - [x] pointerを含むpersistent相当データとfresh workspaceを含め、値・アドレス・GraphExec同一性を検証する。
-- [ ] RTX 3090・Qwen3.8-27B・context/KV 163840を暫定160K設定として容量を計測する。
+- [x] RTX 3090・Qwen3.8-27B・context/KV 163840を暫定160K設定として容量を計測する。
   実際のartifact、量子化、spec backend、Vision設定、concurrency、Host cache設定を明記する。
 
 出口条件: 対象環境でPoC成功、3領域で20 GiB回収の見込みと48 GiB RAM予算を実測から判断できること。
@@ -187,7 +187,7 @@ P2検証（2026-10-02）: WSLC CUDA 13.1 / GCC 13 / RTX 3090でartifact material
   used bytes、live KV、lendable prefixだけのコピーに縮めない。
 - [x] workspaceをfixed-VA化し、fresh backingで必要な初期化のみ実行する。
 - [x] snapshotはSUSPENDED中と復旧判断に必要な失敗時に保持し、resume成功後に解放する。
-- [ ] CPU側sequence/cache/lease metadataを維持し、既存continuationからの生成とoverlay再実行を検証する。
+- [x] CPU側sequence/cache/lease metadataを維持し、既存continuationからの生成とoverlay再実行を検証する。
 
 出口条件: persistent全bytesの復元とfresh workspaceでの推論が成立し、graph再構築が不要なこと。
 
@@ -222,7 +222,7 @@ P4作業中（2026-10-02）: EngineCoreへ唯一のresidency state、admission�
 
 ### P6: 実機受入とドキュメント
 
-- [ ] 下記検証表を実施し、利用した環境・設定・測定値・未実施項目を本書へ記録する。
+- [x] 下記検証表を実施し、利用した環境・設定・測定値・未実施項目を本書へ記録する。
 - [ ] `docs/serving.md`、`docs/cli.md`、`docs/maintainer/engine-architecture.md`、関連するmemory/overlay説明を更新する。
 - [ ] MCPサーバーの直接呼び出しで、suspend → 画像生成 → 画像生成側のGPU解放 → resume → 画像評価を確認する。
   ユーザー指示（2026-10-02）により、NInferの実装・単体受入後に別リポジトリ E:\koji\work\20260813\qwen-image-runtime\qwen-image-runtime のSPEC/PLANに従って画像MCPを実装し、その後直接MCP呼出しによる連携受入を行う。汎用model managerは実装しない。OpenCode等のハーネス経由の検証は後日別途判断する。
@@ -380,3 +380,45 @@ nativeの1cycle結果は /acceptance/native-one-cycle-report.json。native100回
 P6とNInfer全体は未完了。次は100cycle結果と各cycleのcontinuation/cache/Graph/VRAM/RAMを確認し、P0のproduction ownership/workspace監査、P3の実Vision overlay KV loan/weight fallback再実行、production workspace poison、raw token一致、残る故障検証を進める。P0/P3の未チェック項目は免除しない。画像MCPはNInfer受入完了後。
 
 この受入tool/configuration単位のcheck: interposer実compile/run、native1cycle PASS、WSLC Python3.12.3 py_compile PASS、git diff --check PASS。READMEへnative volume配置・Graph trace・直接HTTP試験手順と検証範囲を記載し、全対象diffを確認した。native100cycleはこのcheckpoint時点で稼働中であり、完了チェックは付けない。
+
+### P6単体受入完了: ownership / workspace / continuation / endurance（2026-10-02）
+
+RTX3090、WSLC CUDA13.1/GCC13/Python3.12.3、指定Qwen3.8-27B/rk8v4/160K/MTP3/Vision overlayで native100cycle が complete=true、errorなし、100/100 PASS。全回GPU usedはresume後22166MiBで一定、suspendedは334MiB/free23993MiB、解放21.3203GiB。Graph capture18/instantiate10/destroy0は試験中不変で、同じ10個のGraphExecだけをlaunchした。stored Responses継続出力・token数は全回一致、cached tokensは全回65。process VmHWM最大18,343,396KiB（17.49GiB）、VmSwap0。resume後RSSは12.64〜12.81GiB、最後10回は13,427,864〜13,428,324KiBに収まり、継続的な増加は観測されない。
+
+平均suspend3.6758秒（3.1981〜5.3813）、resume7.9281秒（7.3991〜8.8503）、weight pipeline6.0855秒（5.8761〜6.7709）。復帰直後の継続要求TTFTはserver.logのreq#6〜105の100件で平均38.899ms（32.8〜54.4ms）。reportは /acceptance/100-cycle-report.json。単発21.6秒はresume単独の値ではなく、旧Windows bind配置の全iteration値だった。
+
+#### 所有権・stream・arena外allocation監査
+
+| 領域 | 実所有者とview | 容量・physical bytes | relevant work |
+|---|---|---|---|
+| WeightArena（overlay） | Modelのartifact backingにあるEvictableWeightPool。MaterializedArtifact/Parametersのarena/Tensorはborrowed view | HTTP構成physical17,918,066,688。直接Engine構成logical17,904,356,352 | materializerのtransfer streamをupload完了まで同期。idle Vision window/weight evictionなし |
+| persistent（overlay KV tier） | ProgramImpl::kv_arena（EvictableKVPool）が全persistent backingを所有。persistent DeviceArenaはborrowed view | HTTP whole snapshot logical4,754,642,176、physical4,756,340,736。直接Engine構成logical4,726,981,888 | compute/transfer/Vision/hybrid restoreをidle判定し全drain。request/transaction/lease/replay完了が前提 |
+| workspace_storage | ProgramImplのowning DeviceArena | logical216,270,848、physical218,103,808 | 同じrelevant streamsをdrain。fresh backingでper-unit scratch/Vision bridgeのみ書き直す |
+
+HTTPと直接Engineでは公開・sampling等の予約条件が異なるためpersistentのlogical容量は異なる。直接Engineの量をHTTP snapshot容量へ流用しない。fault probeは実行構成のmemory_summaryからlogical容量を取得して全snapshotへ注入する。
+
+src全体のcudaMalloc/cuMemAlloc系呼出しを検索し、直接device allocationはCore arenaとpipeline stage_linkに限定されていることを確認した。single-GPU suspendはpipelineを起動時拒否するためstage-link bufferと追加rank arenasは作成されない。Tensorは非所有view。残るcontext/modules/Graph/streams/eventsのdriver資源は維持する。HostKV、HostState、pinned ingress/egress、Vision result/weights、limited weight-window mirrorはHost側所有物で維持し、17GiB weight全体mirrorは追加していない。materializer stagingは64MiB×最大4slotとalignment paddingで、復帰時に生成し終了後解放する。
+
+Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages、GDN replay/fold、DFlash persistent state、RoundState/Frame、prefill_hidden、sampling/token counts/grammar controlsが全persistentへ属することを確認した。workspaceはstartupのOp容量計画からper-unit WorkSpanとtransient Vision bridgeを提供し、ordinary prefill/decode、MTP verify/draft、Vision input/window/bridgeは読取り前に書き込む。request/context materialization/Vision windowが残る間はsuspendしない。境界を越えるCPU cache/page/state/lease/sequence metadataはそのまま維持される。新たなsnapshot領域やarena分割は不要だった。
+
+#### 実Programのfresh workspaceとoverlay再実行
+
+追加standalone target `ninfer_qwen3_5_suspend_real_test` は明示artifact/PNG/KV容量で実Engineを使用する。backendはrk8v4、FP16 GDN、MTP3、Vision overlay。acceptance-only backing-probe.soでphysical workspace全218,103,808 bytesを各resume後83/84/85で汚し、同じworkspace VAを観測した。製品debug APIや通常initializationは追加していない。
+
+- KV163840: prefix reuseを無効にし、赤/青224px PNGを必ず再encode。3/3回、text9tokensとVision4tokensのraw token vectorが対照に完全一致。overlay_windows=1、exclusive=0で実KV loanを確認。
+- KV2048: 同じ画像と対照で3/3回raw tokens一致、overlay_windows=1、exclusive=1で実weight fallbackを確認。fallbackを強制するための既存startup設定差であり、160Kの容量受入は前記100cycleで行った。
+- 同じKV163840で別プロセスgpu-borrowがsuspended中に20GiBをcudaMalloc、全bytesをfill、先頭/末尾をD2H確認しfreeして終了。その後のtext/Vision一致を3/3回確認。
+- 4096px/16384 merged tokensの画像frontierをcachedにした対照をsuspend前に繰返して安定性確認。resume後3/3回、16403 cached tokensを維持してraw token vector一致。最終Default retention構成でもworkspace汚染＋別プロセス20GiB使用を各回行い3/3回一致。
+- 各direct Graph traceは最初のlaunch以降capture/instantiateなし、同一GraphExecのみをlaunchし、destroyはEngineの通常終了時だけ。borrow/cache-final traceにも同じ条件を確認した。
+
+最初の大画像HTTP比較ではcold出力とcached出力の不一致があった。直接Engineで最初のsuspend前に cold_equals_cached=0 を再現し、suspend flagなしの既存allocation経路（control mode）でも同じ差を確認した。これは今回のrestoreの影響ではない。比較は同じcached実行経路のsuspendなし対照と復帰後のraw token列に揃え、完全一致した。cold/cache間の数値差の原因・解消はこのresidency変更では扱っていない。画像入力を実際に再encodeする受入は別途prefix reuse無効で完了している。
+
+#### 故障・RAM・検証範囲
+
+実モデルのone-shot注入はhost/d2h/h2d/unmap/release/access全6ケースPASS。Host確保失敗はbacking/snapshotを変えずREADY、生成一致とsuspend再試行成功。D2H失敗はbackingを解放せずERROR。H2D/access失敗はsnapshotを保持してERROR、推論拒否。workspace unmap失敗はpersistentを先に解放したpartial状態、pool release失敗はunmap後handle残存状態を実際に通し、どちらもERROR/snapshot/診断保持、正常destructor終了。Coreのcreate/map/access途中cleanupはP1 GPU testで検証済み。artifact read/immutable-source failureはP2/P4/P5で検証済み。永久的なCUDA context喪失の実機注入は行っていない。
+
+追加試験中、Windows Win32_OperatingSystemを約2秒間隔で106sample取得。total49,674,076KiB（47.37GiB）、最低free6,309,560KiB（6.02GiB）、観測最大使用41.36GiB。OS/既存IDE・agent等を含む実ホスト値であり、process RSSだけで予算を判定していない。WSLC guest MemTotal24,285,784KiB（23.16GiB）。HostKV8GiB/State8とoverlay pinned Vision295,719,424 bytes、window capacity1,107,296,256 bytes、whole snapshotを含めNInfer単体が安定した。これはsampled peakであり瞬間的peakの厳密上限ではない。OpenCodeハーネスと画像runtime同時常駐はこの単体試験に含めず、ユーザー指示どおりMCP実装後の直接連携・後日のハーネス検証へ残す。
+
+関連実装とdocsのdiffレビュー、git diff --check、追加C++ target/link、probe g++ build、gpu-borrow nvcc buildが成功。明示model/imageありの実GPU試験が上記PASS。引数なしCTestは意図したskip77（0.62秒）でありGPU PASSの代用にはしていない。P4/P5のfixture/options/HTTP checksは既にPASSし、その後製品実装は変更していない。全suite/Windows native、未用意DFlash/DFlash2 artifact、Hybrid cache、resident/cpu Visionの実モデル組合せは未実施。通常none backendはP4の生成fixtureで確認済み。今回の実モデル受入対象は指定single-GPU/C1/MTP3/overlay。
+
+次の作業はqwen-image-runtimeのPhase0 baseline build/Generate/Edit、その後同repo SPEC/PLANに沿うMCP実装・直接テスト。NInfer standalone受入は完了し、P0/P3残項目も完了。P6の最後のMCP連携は画像MCP実装後に行うため未チェックを維持する。ninfer-suspend-acceptanceは停止済みで100cycle結果を保持、ninfer-suspend-realはsleep infinityで現在GPUモデルなし、ninfer-suspend-devの差分build成果物も保持。必要時 wslc start ninfer-suspend-acceptance で同じnative volume構成のHTTP serverを再開できる。生ログはE:\koji\work\20260813\NInfer\tmp\suspend-acceptance、repoにbinary/model/logはcommitしない。

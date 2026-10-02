@@ -229,6 +229,17 @@ Host/Pinned payload 不重复保留。恢复复用初次加载的范围合并、
 在使用前写入。检查覆盖 request、context transaction、Vision window、pool loan，以及 compute、transfer、
 Vision 和 hybrid cache 独立 restore stream。detach 开始后，关闭时不执行读取 Device 的 reset 或 disk spill。
 
+Physical ownership stays with the actual allocator: ordinary Model storage is owned by the
+artifact materialization arenas; overlay weights are owned by `EvictableWeightPool`, with
+borrowed Model arena views. Program owns workspace storage and either an owning persistent
+arena or an `EvictableKVPool` with a borrowed persistent view. CPU page/slot/cache bookkeeping,
+limited overlay mirrors, pinned Vision weights/results and ingress/egress buffers remain alive.
+Whole-persistent snapshot includes prefill hidden state, sampling/token-count/grammar controls,
+KV and execution tables, StateImages and speculative replay/state. Workspace layout comes from
+the startup Op plans and contains only per-unit scratch and the transient Vision bridge;
+cross-request values belong to persistent storage or host-owned state. Single-GPU suspend excludes
+pipeline stage-link allocations; CUDA context/modules/streams/events/Graph resources remain resident.
+
 Engine 的 `suspend()`、`resume()` 与 `residency()` 是 residency 管理入口。EngineCore 独占状态；
 状态与 admission 使用同一个短 queue lock。管理操作之间及与 worker execution 的竞争使用 try-lock，
 outstanding reservation、pending 或 Program 忙时立即失败，不取消或清空请求。传输期间不持有 queue lock；

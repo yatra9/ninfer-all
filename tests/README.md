@@ -38,6 +38,14 @@ It is standalone for targeted GPU acceptance without rebuilding the complete tes
 to check authentication, public aliases, management body validation, service response reservations,
 suspended inference rejection, explicit/idempotent resume and ERROR diagnostics. The CLI and
 serve option tests are standalone too, so these checks can build independently of the full bundle.
+`ninfer_qwen3_5_suspend_real_test` is a standalone opt-in real-artifact acceptance executable:
+pass an explicit artifact, PNG and KV capacity. It checks exact text and Vision token vectors
+over three fresh-backing resumes, forces actual overlay execution, and reports KV versus weight
+loan use. The `cache` mode compares an already reused image frontier before and after suspend.
+Failure modes and an optional separate 20 GiB borrower are acceptance-only controls; build and
+run instructions are in [`../tools/suspend-dev/README.md`](../tools/suspend-dev/README.md).
+Without explicit arguments it skips with code 77. Its single-GPU configuration uses rk8v4,
+FP16 GDN state and MTP3; HTTP/Graph endurance is tested separately by `acceptance.py`.
 `CMakeLists.txt` includes explicit registrations from `cmake/`, `artifact/`, `models/qwen3_5/`
 and `ops/`. Registration helpers live in `cmake/NinferTests.cmake`; included manifests keep
 executables and CTest working directories under `build/tests/`.

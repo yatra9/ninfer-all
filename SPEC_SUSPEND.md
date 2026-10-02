@@ -189,7 +189,7 @@ resume
 起動時に VMM 対応を確認する。
 
 ```cpp
-CU_DEVICE_ATTRIBUTE_VIRTUAL_ADDRESS_MANAGEMENT_SUPPORTED
+CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED
 ```
 
 `--enable-model-suspend` 指定時に未対応 GPU / driver だった場合は起動時エラーとする。未指定時は従来 path で起動する。
@@ -922,19 +922,21 @@ v1 では、複数モデル管理、自動切替、resource class 指定 API、L
 
 初期実装の Done 条件は以下。
 
-- [ ] RTX 3090 で VMM + existing GraphExec remap PoC が安定動作
-- [ ] Qwen3.8-27B weight arena を fixed-VA VMM 化
-- [ ] `.ninfer` から same VA への weight restore が可能
-- [ ] `Program::persistent` を分割せず fixed-VA VMM 化
-- [ ] `Program::persistent` whole-arena raw D2H/H2D snapshot/restore が可能
-- [ ] `workspace_storage` を fixed-VA VMM 化し、内容保存なしで復帰可能
-- [ ] suspend 後 20 GiB 以上 VRAM が利用可能
-- [ ] resume 後 CUDA Graph recapture / reinstantiate なし
-- [ ] 160K設定で persistent snapshot を含め48 GiB RAM内で安定動作
-- [ ] `/v1/models/{model}/suspend` 実装
-- [ ] `/v1/models/{model}/resume` 実装
-- [ ] `/v1/models/{model}/residency` 実装
-- [ ] suspended 中 inference が 503
-- [ ] busy suspend が 409
-- [ ] suspend/resume の繰り返し試験で leak / corruption がない
+- [x] RTX 3090 で VMM + existing GraphExec remap PoC が安定動作
+- [x] Qwen3.8-27B weight arena を fixed-VA VMM 化
+- [x] `.ninfer` から same VA への weight restore が可能
+- [x] `Program::persistent` を分割せず fixed-VA VMM 化
+- [x] `Program::persistent` whole-arena raw D2H/H2D snapshot/restore が可能
+- [x] `workspace_storage` を fixed-VA VMM 化し、内容保存なしで復帰可能
+- [x] suspend 後 20 GiB 以上 VRAM が利用可能
+- [x] resume 後 CUDA Graph recapture / reinstantiate なし
+- [x] 160K設定で persistent snapshot を含め48 GiB RAM内で安定動作
+- [x] `/v1/models/{model}/suspend` 実装
+- [x] `/v1/models/{model}/resume` 実装
+- [x] `/v1/models/{model}/residency` 実装
+- [x] suspended 中 inference が 503
+- [x] busy suspend が 409
+- [x] suspend/resume の繰り返し試験で leak / corruption がない
 - [ ] MCPサーバーを直接呼び出し、suspend -> image generation -> image GPU release -> Qwen resume -> image evaluation を確認する（OpenCode等ハーネス経由の検証は後日別途判断）
+
+NInfer単体項目は2026-10-02にWSLC/RTX3090の指定160K/MTP3/Vision overlay構成で受入済み。容量・RAM・100cycle・raw token・Graph・overlay両貸出経路・故障結果と未検証組合せは[PLAN_SUSPEND.md](PLAN_SUSPEND.md)のP6単体受入結果を参照する。画像MCP実装はこの単体受入後に進め、最後の直接連携項目はその実装後に検証する。OpenCode等ハーネスの実行はユーザー指示により後日扱う。
