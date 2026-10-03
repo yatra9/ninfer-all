@@ -793,16 +793,16 @@ PoC / debug build では resume 後に小さな validation inference / graph rep
 保存はHost slabsとCPU indexのみを読み、GPU backingの復元・GPU reset/spill・暗黙resumeを行わない。
 detachまたはresumeに失敗してERRORになった場合は、この正常終了保存を行わない。
 
-## 17. 起動オプション案
+## 17. 起動オプション
 
-v1 で必須なのは以下だけでよい。
+実装済みの起動オプションは以下のとおり。
 
 ```text
 --enable-model-suspend
 --suspend-snapshot-memory pinned|pageable  # default: pinned
 ```
 
-必要なら debug / validation 用に `--suspend-require-vmm` を追加してよい。
+有効化時にCUDA VMM対応を検査し、非対応なら起動を拒否する。
 
 既存 `--host-kv-mib` / `--host-state-slots` は suspend 機能専用には使用しない。
 

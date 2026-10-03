@@ -5,8 +5,8 @@
 ## 0. 現在地と再開地点
 
 - 要件の正本は [SPEC_SUSPEND.md](SPEC_SUSPEND.md)。本書は実装順序、対象コード、検証、未確定事項を管理する。
-- 最新追加（2026-10-03）: suspendのsnapshot用Hostページを最大4 CPU workerで事前確保し、関連回帰検証と実Engine測定を完了。ページ確保を含むsuspend平均3.50秒→1.89秒（約46%短縮）。末尾「snapshotページ事前確保の並列化」に結果・再現手順・限界を記載。RAMの常時保持は追加していない。
-- 前追加（2026-10-03）: O_DIRECT 2並列を初回load/resume共通materializerへ組込み、回帰検証と実Engine測定を完了。最大64 MiB×4 stagingを維持。weight restoreは旧版6.25〜6.32秒→5.76秒、resume全体は測定間の変動あり。末尾「O_DIRECT 2並列の組込みと実Engine測定」に結果・再現手順・限界を記載。RAM保持案は保留。
+- 最新実装（2026-10-03、46d90deaまで完了）: 起動時pinned snapshotを既定として再利用し、O_DIRECT 2並列と64 MiB物理KV貸出し区画を採用。区画サイズは本体constexprで変更可能。最終warm平均suspend0.533秒/resume6.373秒、49復帰cycleでtext/Vision token一致、並列・tight KV・weight fallbackも成功。区画変更自体はHost RAMを増やさないが、pinned方式はREADYでも4.402 GiBのsnapshotを保持する。pageable方式はlazy確保と最大4 CPU workerのページ準備を維持する。
+- masterマージ準備: 最新の仕様・性能・検証範囲は本書末尾のマージ準備欄とdocs/performance/qwen3.8-27b.mdを参照。通常Dockerfileへ追加build flagは不要。全重みRAM保持案は保留。画像MCP連携は対象外。
 - HTTP追加: suspendのauto_resumeは省略時true、false指定時のみ停止中の生成を即座に503で拒否する。共有restore・bounded受付・切断/deadline/ERRORの追加実装と検証は末尾「HTTP生成要求による共有auto resume」を参照。Engine自身の明示管理契約は維持する。
 - 実装開始（2026-10-02）。P0専用PoC `tests/test_vmm_suspend.cu` を追加し、WSLCの既存
   `ninfer-syntax:dev`、CUDA 13.1.115、RTX 3090でcompile/run成功。1000回のphysical backing
@@ -43,7 +43,7 @@
 | 対象 | suspend | resume | 保持するもの |
 |---|---|---|---|
 | WeightArena | physical backingを解放 | 同一VAへ再確保しartifactからupload | binding、復元用plan、artifact reader |
-| `Program::persistent` | capacity全量を通常RAMへコピー後にbackingを解放 | 同一VAへ再確保し全bytesを復元 | CPU metadata、KV/State lease、snapshot |
+| `Program::persistent` | capacity全量をHost snapshotへコピー後にbackingを解放 | 同一VAへ再確保し全bytesを復元 | CPU metadata、KV/State lease、snapshot（既定pinned常駐、任意pageable） |
 | `workspace_storage` | 内容を保存せずbackingを解放 | 同一VAへ再確保し必要箇所のみ初期化 | layoutとVA |
 
 CUDA context、Graph/GraphExec、streams/events、VA reservation、pinned ingress/egressは維持する。
@@ -598,3 +598,14 @@ Programのstartup persistent bindingsを追跡し、KV/slab tables、StateImages
 - 記録: E:\koji\work\20260813\NInfer\tmp\suspend-acceptance\kv-piece-20261003\report.md、summary.json/final-summary.json、各MiB raw jsonl/log、2m-final/64m-final raw/core logs、main.cpp/profile/build.py/compare.ps1/final-compare.ps1/analyze.py、concurrent.cpp/concurrent-profile/concurrent.jsonl/log、real-test/pressure.log/fallback.log、acceptance.sh/verify-acceptance.py。check-core.py/build-concurrent.py/check-final.shも保存。.cache補助scriptはcommit対象外。workspaceとdev source mirrorの最終定数は64 MiB。
 - docs/check: SPEC_SUSPEND.md、Engine architecture、serving、tests README、qwen3.8 performanceの過去2 MiB測定の適用範囲を更新。全diffレビューとgit diff --checkを実施。Windows native/全suite/100cycle endurance、大画像・長い断片化履歴でのstall比較は未再実施。hardware/occupancyによる最適値は普遍とは扱わない。画像MCP連携は対象外。
 - 次の具体的作業: この実装・サイズ選択・対象検証は完了。この単位をcommitする。追加作業は次の指示待ち。定数を変更して再検証する場合はcore pool/backing/failureとmodel suspend/completionをbuild・実行し、保存済み実モデル比較と並列/tight/fallback受入を再実行する。既存dev/real containers、build tree、native model volumeは保持。
+
+### masterマージ準備（2026-10-03、完了）
+
+- 統合内容: single-GPU idle suspend/resumeを`--enable-model-suspend`でopt-inし、CUDA context/GraphExec/VAを維持してモデルbackingを解放する。HTTP suspendはauto_resume省略時true、false時は生成を503で拒否。起動時pinned snapshot再利用、O_DIRECT 2読込、64 MiB物理KV貸出し区画の最適化を含む。既存の独立した実装・修正・検証commitを保ったままmasterへ統合できる。
+- 分岐確認: 準備開始時の`master...ninfer-suspend`はmaster側0/本branch側19commit。masterは本branchの祖先であり、fast-forward可能。今回は準備のみでmasterは変更していない。統合時に祖先関係を再確認し、repository rootで`git switch master`、`git merge --ff-only ninfer-suspend`を実行する。
+- ドキュメント: PLAN冒頭の古い現在地・通常RAM前提を更新し、SPECの起動オプションを実装済み契約へ確定。docs索引、Linux/Docker起動案内、Qwen3.8性能資料に現在の設定、計測条件、旧版/現行比較、pinned READY RAM、検証範囲を反映。API/CLI/help/Engine architectureは既に対応済み。通常Dockerfileへ機能専用build flagは不要。
+- 受入ツール修正: acceptance.pyの停止中503試験は`auto_resume:false`を明示し、有効なuser messageを送る。以前の`{}`＋空messagesは現在のauto resume/入力検証契約と矛盾していた。実モデルtestの`host`注入だけpageableを指定し、起動時pin確保済みの経路でlazy Host確保失敗を期待しない。他モードは既定pinnedを維持する。tools READMEも更新。
+- 今回の検証: WSLC Linux/CUDA13.1/GCC13/RTX3090、既存Ninja treeで実モデルtargetの2step差分build成功。明示native artifact、KV163840でHost確保のone-shot bad_allocを観測し、READY/backing維持、生成token一致、次の正常suspend/resumeまで成功。最終ninfer-serveで更新HTTP受入ツールを1cycle実行し、complete=true、21.3203 GiB release、停止中503、明示復帰後の継続結果一致を確認。Python3.12.3 py_compile、変更Markdownの相対リンク先確認、全差分レビュー、git diff --check成功。今回起動したserverは終了済み。記録はhost tmp/suspend-acceptance/merge-ready-20261003（host-failure.log、server.log、http-report.json、check.sh）。
+- 既存証拠: Engine/HTTP/auto resume/options、H2D完了gate、pool部分失敗cleanup、materializer、PoC/Graph再利用、100cycle受入、最新49実復帰cycleと並列Vision/weight fallbackは各checkpoint参照。今回のhelper修正は製品実装を変更しないため、通過済み全campaignを重複実行していない。
+- 未実施/範囲: 通常Dockerfileによる最終image build/runそのものは未実行（同一toolchainのWSLC製品build/実行は成功済み）。全suite、Windows native、最適化後100cycle、全artifact/backend組合せ、長時間断片化/stall計測は再実行していない。suspendは単一GPU限定。画像MCP連携は完了条件から除外済み。pinned既定はREADYにも本構成で4.402 GiBを保持するため、節約時はpageableを指定する。
+- 次の具体的作業: 本準備をcommitし、マージ可能という判断と検証範囲を返す。masterへの統合自体、push/PR公開は今回実施しない。統合後は通常Dockerfileの製品imageをbuildし、既存起動設定へ`--enable-model-suspend`を付ける。既存containers/build tree/model volumeを保持。

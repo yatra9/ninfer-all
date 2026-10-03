@@ -28,6 +28,11 @@ int main(int argc, char** argv) {
         options.gdn_state_fp16 = true;
         const bool control = argc == 5 && std::string(argv[4]) == "control";
         options.enable_model_suspend = !control;
+        // The host fault targets lazy snapshot allocation during suspend.
+        // Pinned snapshots are allocated before this probe is armed.
+        if (argc == 5 && std::string(argv[4]) == "host") {
+            options.suspend_snapshot_memory = SuspendSnapshotMemory::Pageable;
+        }
         options.enable_vision = true;
         options.vision_residency = VisionResidency::Overlay;
         options.speculative.backend = SpeculativeBackend::Mtp;

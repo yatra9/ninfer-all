@@ -35,6 +35,8 @@ The executable `--help` output is the exact source for command-line option spell
 - [Benchmarks](../bench/README.md)
 - [Tests](../tests/README.md)
 - [Tools](../tools/README.md)
+- [Suspend/resume specification](../SPEC_SUSPEND.md) and [implementation/validation record](../PLAN_SUSPEND.md)
+- [Suspend acceptance tools](../tools/suspend-dev/README.md)
 - [Capability evaluation](../eval/README.md)
 
 ## Maintainer references

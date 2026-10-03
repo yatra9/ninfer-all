@@ -65,7 +65,10 @@ The script targets a single 24 GiB GPU and requires at least 20 GiB released and
 free while suspended. It records timings, device memory, server process RSS and
 high-water mark, continuation usage, and actual Graph calls. It compares rendered
 continuation output and output token counts, rejects inference while suspended,
-and verifies existing GraphExec reuse without recapture. It writes progress after
+and verifies existing GraphExec reuse without recapture. It explicitly selects
+`auto_resume: false` and uses a valid generation request for the suspended 503 check.
+Shared automatic resume is covered by the Engine/HTTP tests listed in `tests/README.md`.
+It writes progress after
 each cycle; `complete: true` marks completion. Process RAM is not total host RAM,
 and output comparison does not independently prove raw token-vector equality.
 Vision overlay execution, workspace poisoning, and fault tests remain separate
@@ -110,7 +113,10 @@ For one-shot failures, use `LD_PRELOAD=/acceptance/backing-probe.so` and set
 `NINFER_COPY_FAILURE` to the final argument: `host`, `d2h`, `h2d`, `unmap`,
 `release` or `access`. The test configures full-persistent and workspace sizes
 after startup, before transition. Host/copy failures target the exact persistent
-capacity; unmap/access target the physical workspace extent. Release fails the
+capacity; the `host` mode selects pageable snapshots to exercise allocation during
+suspend, while other modes retain the default startup-pinned snapshots. Startup
+pin-allocation failure is covered by the standalone model suspend test.
+Unmap/access target the physical workspace extent. Release fails the
 first physical release after injection is armed, testing incomplete pool detach.
 These simulated API failures occur before the intercepted operation; cleanup
 can retry because each injection fires once. The test checks Ready after Host

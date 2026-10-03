@@ -97,14 +97,15 @@ def main():
         save()
         for iteration in range(args.cycles):
             start = time.monotonic()
-            suspended = call(base + "/suspend", {})
+            suspended = call(base + "/suspend", {"auto_resume": False})
             gpu_suspended = gpu()
             ram_suspended = ram()
             assert suspended["state"] == "suspended" and suspended["persistent_snapshot_bytes"] > 0
             assert suspended["retained_device_bytes"] == 0
             assert suspended["released_device_bytes"] >= 20 * 1024**3
             assert gpu_suspended["free_mib"] >= 20 * 1024
-            call("/v1/chat/completions", {"model": args.model, "messages": [], "stream": True}, 503)
+            call("/v1/chat/completions", {"model": args.model,
+                 "messages": [{"role": "user", "content": "Hello"}], "stream": True}, 503)
             assert call(base + "/residency")["state"] == "suspended"
             resumed = call(base + "/resume", {})
             assert resumed["state"] == "ready" and resumed["persistent_snapshot_bytes"] == 0

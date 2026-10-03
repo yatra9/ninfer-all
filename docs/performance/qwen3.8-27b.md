@@ -7,11 +7,13 @@ On this page: [run records](#scope-and-run-records), [context profile](#no-specu
 [decode saturation](#decode-saturation),
 [comparisons](#comparisons-and-limitations),
 [RTX 3090 vision residency](#vision-residency-on-rtx-3090-groupwise-int-sm_86),
+[RTX 3090 suspend/resume](#suspend-and-resume-on-rtx-3090),
 [reproduction](#reproduction-and-reports).
 
 ## Scope and run records
 
-All runs use the [common RTX 5090 serving profile](methodology.md#common-serving-profile).
+Except for the explicitly marked RTX 3090 sections, runs use the
+[common RTX 5090 serving profile](methodology.md#common-serving-profile).
 The tables below specify differences; all runs use stochastic sampling. Dates identify historical
 campaign labels. Run IDs are local to this page and link to the reproduction command, artifact
 path, and local report directory.
@@ -372,6 +374,46 @@ In these measurements, 192 MiB left the arena in 3.9–31 ms and came back in 12
 `kLendingPieceBytes` in `src/core/evictable_kv_pool.cu`; these historical timings do not establish
 the performance of another piece size. The current size comparison is recorded in
 [`../../PLAN_SUSPEND.md`](../../PLAN_SUSPEND.md).
+
+## Suspend and resume on RTX 3090
+
+Measured 2026-10-03 on RTX 3090, WSLC Linux, CUDA 13.1 and GCC 13. The explicit
+artifact was `Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer` on a native WSLC
+model volume, with context/KV 163840, rk8v4 KV, FP16 GDN, MTP3 with optimized
+proposal head, Vision overlay, concurrency 1, Host KV 8 GiB and Host State 8 slots.
+Each process ran five public Engine suspend/resume cycles after text/Vision warmup;
+means below exclude the first cycle. Restored text token vectors matched their
+baselines in both campaigns; the final campaign also compared image token vectors.
+These are residency latencies, not generation throughput or TTFT.
+
+| Measurement | Suspend | Resume | Sum |
+|---|---:|---:|---:|
+| Before optimization, native storage, one reader | 3.427 s | 7.955 s | 11.382 s |
+| Final, startup-pinned snapshot, two readers, 64 MiB KV pieces | 0.533 s | 6.373 s | 6.906 s |
+
+These separate campaigns indicate about 84% shorter suspend and 39% shorter combined
+latency; storage and transfer variation affect resume. The latest matched 2/64 MiB
+comparison reduced suspend from 1.084 to 0.533 s and backing attachment from 0.815
+to 0.197 s. Weight restoration still takes most of resume. A 2/8/16/32/64/128 MiB
+sweep selected 64 MiB because suspend plateaued there; 128 MiB made lending coarser
+for little further benefit. The tuning constant is `kLendingPieceBytes` in
+`src/core/evictable_kv_pool.cu`; changing it requires a rebuild.
+
+Pinned snapshots retain 4,726,981,888 bytes (4.402 GiB) throughout this process,
+including READY. Compared with pageable snapshots, current READY RSS increased
+from 11.897 to 16.298 GiB; the later physical-piece optimization adds no Host RAM.
+`--suspend-snapshot-memory pageable` selects temporary snapshots instead.
+The final 49 restored cycles included concurrent text/Vision, tight KV capacity and
+weight fallback. Earlier acceptance covered 100 HTTP cycles, GraphExec reuse,
+workspace poisoning, a separate 20 GiB GPU borrower and injected failures.
+The final optimizations did not repeat that entire campaign. Windows native,
+multi-GPU suspend, image MCP integration and broad long-context fragmentation/stall
+measurements are outside this result. Earlier Vision stall tables on this page used
+2 MiB pieces and should not be interpreted as current 64 MiB measurements.
+
+[Acceptance instructions](../../tools/suspend-dev/README.md) describe the native
+model volume, exact-token test and HTTP/Graph probes. Detailed campaign results and
+validation limitations remain in [the implementation record](../../PLAN_SUSPEND.md).
 
 ## Reproduction and reports
 
