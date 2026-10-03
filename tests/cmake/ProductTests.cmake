@@ -29,7 +29,7 @@ ninfer_add_test(ninfer_perplexity_evaluation_test
 target_include_directories(ninfer_perplexity_evaluation_test PRIVATE
   ${PROJECT_SOURCE_DIR}/apps/perplexity)
 
-ninfer_add_test(ninfer_cli_options_test
+ninfer_add_test(ninfer_cli_options_test STANDALONE
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_cli_options.cpp" ${PROJECT_SOURCE_DIR}/apps/cli/options.cpp
   LIBRARIES ninfer_runtime_support ninfer_product_logging)
 
@@ -55,7 +55,7 @@ ninfer_add_test(ninfer_mcp_proxy_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_mcp_proxy.cpp"
   LIBRARIES ninfer_serve)
 
-ninfer_add_test(ninfer_serve_options_test
+ninfer_add_test(ninfer_serve_options_test STANDALONE
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_serve_options.cpp"
   LIBRARIES ninfer_serve)
 
@@ -78,6 +78,18 @@ ninfer_add_test(ninfer_console_stats_test
 ninfer_add_test(ninfer_http_error_handler_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_http_error_handler.cpp"
   LIBRARIES ninfer_serve)
+
+ninfer_add_test(ninfer_model_residency_http_test STANDALONE
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_model_residency_http.cpp"
+  LIBRARIES ninfer_serve ninfer_core ninfer_product_logging)
+set_tests_properties(ninfer_model_residency_http_test PROPERTIES SKIP_RETURN_CODE 77)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  ninfer_add_test(ninfer_auto_resume_test STANDALONE
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_auto_resume.cpp"
+    LIBRARIES ninfer_serve ninfer_core ninfer_product_logging)
+  target_link_options(ninfer_auto_resume_test PRIVATE "-Wl,--wrap=cudaStreamSynchronize")
+  set_tests_properties(ninfer_auto_resume_test PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 
 ninfer_add_test(ninfer_http_transport_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_http_transport.cpp"

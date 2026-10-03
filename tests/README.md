@@ -21,6 +21,68 @@ benchmark-report, and external protocol behavior. Repository verification princi
   consumer.
 
 Tests are grouped by observable risk, not by mirroring every source file or class.
+`ninfer_vmm_suspend_test` is the GPU suspend prerequisite PoC: it releases and creates
+physical backing at the same three reserved addresses 1000 times, replays one captured
+GraphExec, checks the complete persistent snapshot and its internal pointers, and poisons
+fresh workspace before each replay. It returns CTest skip code 77 without usable CUDA/VMM.
+`ninfer_suspend_backing_test` qualifies the opt-in arena and both overlay pools across
+detach/new-backing attach, arena moves and detached destruction, create/map/access fault
+cleanup, busy rejection, and subsequent overlay loans using the new handles.
+On Linux, standalone `ninfer_suspend_pool_failure_test` injects create/map/access failures at
+the second piece of both pools. Its 18 cases also cover rollback unmap/release failures,
+immediate release of successful pieces and destructor retry of only the retained resources.
+`ninfer_evictable_kv_pool_test` qualifies the tuned physical lending pieces independently of
+logical KV pages: partial payload boundaries, rounded windows, discontiguous leases, live-page
+isolation, lease-failure rollback, fragmented/promised-page refusal, and payload lending beyond
+256 pages per piece. It also refuses a full-pool early loan that would consume pending activation
+demand. Its fixtures follow the compiled piece size without a full model.
+`ninfer_model_suspend_test` runs a generated two-layer attention/GDN artifact with
+supported dense geometry and BF16/row-scaled FP8 weights through the public Engine:
+opt-in/disabled handling, active and queued request rejection, repeated fresh-backing generation,
+concurrent management/status calls, zero-output submission rejection while suspended and
+1000 zero-output submissions racing ten suspend/resume cycles,
+immutable-source failure with retained diagnostics/snapshot, and suspended/error destruction.
+An additional 32768-slot KV fixture checks three restores of a persistent snapshot larger than
+64 MiB in both pinned and pageable modes, including token equality, device backing release,
+startup pinned capacity/reuse and pageable RAM release after resume. Disabled suspend allocates no buffer.
+Hybrid Host-cache persistence is checked across both Ready and Suspended shutdown, followed by
+startup restoration of saved blocks/snapshots and generation comparison. Failed-resume ERROR
+shutdown must not save the cache.
+On Linux, test-only link wrapping pauses a zero-output submission after its initial availability
+check. Suspend completes before that submission continues, so final admission must reject it.
+This deterministically covers the race; removing final admission makes the test fail.
+It is standalone for targeted GPU acceptance without rebuilding the complete test bundle.
+Linux standalone `ninfer_suspend_restore_completion_test` stages the persistent H2D into pinned
+memory and holds its default-stream DMA behind a callback gate. It requires RESUMING and retained
+snapshot until completion, then checks successful generation or an injected synchronization
+failure with ERROR, rejected admission and retained diagnostics/snapshot, in both memory modes.
+It also injects a startup pin allocation failure, verifies actual pinned storage, one allocation
+across repeated cycles, and buffer release on Suspended shutdown using test-only CUDA link wrapping.
+`ninfer_suspend_upload_timing_test` covers ordinary, transcode-only and mixed weight restores.
+A bounded delay inside transcode upload must appear in the reported duration; restored bytes and
+transfer counts are also checked. Both use test-only linker wrapping and skip without CUDA/VMM.
+`ninfer_model_residency_http_test` uses the same generated artifact with a real HTTP listener
+to check authentication, public aliases, management body validation, service response reservations,
+suspended inference rejection, explicit/idempotent resume and ERROR diagnostics. The CLI and
+serve option tests are standalone too, so these checks can build independently of the full bundle.
+The HTTP cases run with suspend enabled and disabled for ordinary slash aliases and aliases ending
+in one or two `/residency` segments; model detail, status, model list and generation must retain the
+exact public alias without route collisions.
+The HTTP suite also covers default automatic resume and explicit manual suspension, strict boolean
+body validation, policy changes while suspended, all three generation protocols, SSE, rejected
+authentication/input/model IDs without restoration, token-count exclusion and failed automatic resume.
+Linux standalone `ninfer_auto_resume_test` holds restore at a test-only CUDA synchronization gate:
+concurrent requests must share one restore, count against ingress capacity and respect cancellation
+and pending deadlines. A cancelled leader must leave other requests usable; an injected restore
+failure must reach all waiters and prevent subsequent automatic retry.
+`ninfer_qwen3_5_suspend_real_test` is a standalone opt-in real-artifact acceptance executable:
+pass an explicit artifact, PNG and KV capacity. It checks exact text and Vision token vectors
+over three fresh-backing resumes, forces actual overlay execution, and reports KV versus weight
+loan use. The `cache` mode compares an already reused image frontier before and after suspend.
+Failure modes and an optional separate 20 GiB borrower are acceptance-only controls; build and
+run instructions are in [`../tools/suspend-dev/README.md`](../tools/suspend-dev/README.md).
+Without explicit arguments it skips with code 77. Its single-GPU configuration uses rk8v4,
+FP16 GDN state and MTP3; HTTP/Graph endurance is tested separately by `acceptance.py`.
 `CMakeLists.txt` includes explicit registrations from `cmake/`, `artifact/`, `models/qwen3_5/`
 and `ops/`. Registration helpers live in `cmake/NinferTests.cmake`; included manifests keep
 executables and CTest working directories under `build/tests/`.
@@ -31,6 +93,9 @@ added up to tens of GB. Each test keeps its name as a program in the bundle and 
 own process under CTest. Run one by hand with `build/tests/ninfer_tests <name> [args...]`;
 `ninfer_tests --list` prints the names. `ninfer_jinja_test` and
 `ninfer_artifact_materialization_test` stay standalone because Python tests invoke them by path.
+The materialization test checks patterned continuation payloads larger than the four-slot staging
+ring through startup and three same-address restores, with an unchanged 256 MiB staging bound.
+A truncated continuation also exercises parallel read failure while uploads are in flight.
 A test's helpers and entry function must be internal (anonymous namespace) so that programs do not
 collide at link time. The mechanism is `cmake/NinferBundles.cmake`.
 `ops/op_tester.h` and `ops/op_check.h` own only reusable device/guard and comparison mechanics.

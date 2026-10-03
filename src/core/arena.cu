@@ -1,4 +1,5 @@
 #include "core/arena.h"
+#include "core/remappable_allocation.h"
 
 #include <cuda_runtime.h>
 
@@ -416,11 +417,17 @@ DeviceArena::Scope::Scope(Scope&& other) noexcept
     other.arena_ = nullptr;
 }
 
-DeviceArena::DeviceArena(std::size_t capacity_bytes) {
+DeviceArena::DeviceArena(std::size_t capacity_bytes, bool suspendable) {
     if (capacity_bytes == 0) {
         throw std::invalid_argument("DeviceArena capacity must be nonzero");
     }
 
+    if (suspendable) {
+        remappable_ = std::make_unique<RemappableDeviceAllocation>(capacity_bytes);
+        base_ = remappable_->data();
+        cap_ = capacity_bytes;
+        return;
+    }
     void* ptr = nullptr;
 #if NINFER_WDDM_RESIDENCY
     if (core::wddm_residency_lock_enabled()) { ptr = allocate_resident_heap(capacity_bytes); }
@@ -463,7 +470,7 @@ DeviceArena::~DeviceArena() {
 
 DeviceArena::DeviceArena(DeviceArena&& other) noexcept
     : base_(other.base_), cap_(other.cap_), off_(other.off_), peak_(other.peak_),
-      owns_(other.owns_), owned_base_(other.owned_base_), ranks_(std::move(other.ranks_)),
+      owns_(other.owns_), owned_base_(other.owned_base_), remappable_(std::move(other.remappable_)), ranks_(std::move(other.ranks_)),
       active_rank_(other.active_rank_) {
     other.base_        = nullptr;
     other.cap_         = 0;
@@ -485,6 +492,7 @@ DeviceArena& DeviceArena::operator=(DeviceArena&& other) noexcept {
     peak_       = other.peak_;
     owns_       = other.owns_;
     owned_base_ = other.owned_base_;
+    remappable_ = std::move(other.remappable_);
 
     ranks_       = std::move(other.ranks_);
     active_rank_ = other.active_rank_;
@@ -546,6 +554,18 @@ void* DeviceArena::base() const noexcept { return base_; }
 std::size_t DeviceArena::used() const noexcept { return off_; }
 
 std::size_t DeviceArena::capacity() const noexcept { return cap_; }
+
+std::size_t DeviceArena::physical_bytes() const noexcept {
+    return remappable_ ? remappable_->physical_bytes() : (owns_ ? cap_ : 0);
+}
+void DeviceArena::detach_backing() {
+    if (!remappable_ || !ranks_.empty()) { throw std::logic_error("arena has no single-rank suspendable backing"); }
+    remappable_->detach();
+}
+void DeviceArena::attach_backing() {
+    if (!remappable_ || !ranks_.empty()) { throw std::logic_error("arena has no single-rank suspendable backing"); }
+    remappable_->attach();
+}
 
 std::size_t DeviceArena::peak_used() const noexcept { return peak_; }
 

@@ -219,11 +219,17 @@ void ProgramImpl::save_hybrid_cache_for_shutdown() noexcept {
     try {
         // Only Host-resident entries are saved, so every Host write must land before the slabs
         // are read. Lanes still pinning a path do not matter: the save only reads.
-        device.synchronize();
-        if (device.transfer_stream != nullptr) {
-            CUDA_CHECK(cudaStreamSynchronize(device.transfer_stream));
+        if (residency_storage_intact) {
+            device.synchronize();
+            if (device.transfer_stream != nullptr) {
+                CUDA_CHECK(cudaStreamSynchronize(device.transfer_stream));
+            }
+            hybrid_->drain();
+        } else if (!residency_host_cache_quiescent) {
+            return;
         }
-        hybrid_->drain();
+        // Successful suspend already published all Host writes and excluded pending transfers.
+        // Saving those slabs and the CPU index needs neither GPU access nor a resume.
         hybrid_shutdown_save_ = public_result(hybrid_->save(hybrid_file_, hybrid_fingerprint_));
     } catch (const std::exception& error) {
         hybrid_shutdown_save_ = HybridCachePersistence{.message = error.what()};

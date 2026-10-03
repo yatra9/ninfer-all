@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <span>
 
 namespace ninfer::artifact {
@@ -24,6 +25,7 @@ public:
 
 private:
     std::filesystem::path path_;
+    mutable std::once_flag direct_open_;
 #ifdef _WIN32
     // Win32 HANDLEs, kept opaque so this header does not pull in <windows.h>.
     void* file_                = nullptr;

@@ -798,6 +798,20 @@ public:
     // block-table copy and recurrent state -- allocated in that device's own memory.
     std::vector<DeviceArena> persistent_by_rank;
     DeviceArena workspace_storage;
+    // Pageable RAM is lazy; pinned storage is allocated before READY and reused until shutdown.
+    std::unique_ptr<std::byte[]> residency_snapshot;
+    std::optional<PinnedHostBuffer> residency_pinned_snapshot;
+    bool residency_snapshot_valid = false;
+    [[nodiscard]] void* residency_snapshot_data() const noexcept {
+        return residency_pinned_snapshot ? residency_pinned_snapshot->data() : residency_snapshot.get();
+    }
+    bool residency_storage_intact = true;
+    // Successful idle detach permits Host-only persistence at shutdown; ERROR revokes it.
+    bool residency_host_cache_quiescent = false;
+    [[nodiscard]] bool residency_idle() const;
+    void snapshot_persistent();
+    void detach_storage();
+    Program::StorageRestoreTiming restore_storage();
     // Pipeline stages only: scratch for the ranks past the primary device, each allocated in its
     // own card's memory. `work` borrows a slice of each and switches between them as the layer
     // loop walks stages, so every existing workspace call site keeps using one arena object.

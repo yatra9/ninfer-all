@@ -41,7 +41,17 @@ constexpr DWORD kShareMode = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DEL
 // a file pointer; a synchronous handle completes the request inside ReadFile.
 DWORD positional_read(HANDLE file, bool overlapped, std::uint64_t offset, std::byte* destination,
                       DWORD count, const std::filesystem::path& path, const char* operation) {
+    struct Event {
+        HANDLE value = nullptr;
+        ~Event() { if (value) { ::CloseHandle(value); } }
+    } event;
     OVERLAPPED request{};
+    if (overlapped) {
+        // A shared file-handle signal cannot identify which concurrent read completed.
+        event.value = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!event.value) { fail(path, "CreateEventW direct", ::GetLastError()); }
+        request.hEvent = event.value;
+    }
     request.Offset     = static_cast<DWORD>(offset & 0xffffffffULL);
     request.OffsetHigh = static_cast<DWORD>(offset >> 32U);
     DWORD read         = 0;
@@ -124,7 +134,7 @@ std::size_t InputFile::read_direct(std::uint64_t offset, std::span<std::byte> de
         throw ArtifactError(path_.string() + ": unaligned direct read");
     }
     if (destination.empty()) { return 0; }
-    if (direct_file_ == nullptr) {
+    std::call_once(direct_open_, [this] {
         // FILE_FLAG_NO_BUFFERING is the Windows O_DIRECT: sector-aligned offsets, sizes and
         // buffers, which the checks above already guarantee for the 4096-byte payload alignment.
         const HANDLE file = ::CreateFileW(
@@ -134,7 +144,7 @@ std::size_t InputFile::read_direct(std::uint64_t offset, std::span<std::byte> de
             nullptr);
         if (file == INVALID_HANDLE_VALUE) { fail(path_, "CreateFileW direct", ::GetLastError()); }
         direct_file_ = file;
-    }
+    });
     // ReadFile takes a DWORD count; stay a whole number of aligned blocks below 4 GiB.
     constexpr std::size_t kMaximumRequest = 1ULL << 30U;
     std::size_t total                     = 0;
@@ -202,10 +212,10 @@ std::size_t InputFile::read_direct(std::uint64_t offset, std::span<std::byte> de
         throw ArtifactError(path_.string() + ": unaligned or oversized direct read");
     }
     if (destination.empty()) { return 0; }
-    if (direct_fd_ < 0) {
+    std::call_once(direct_open_, [this] {
         direct_fd_ = ::open(path_.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECT);
         if (direct_fd_ < 0) { fail(path_, "open direct"); }
-    }
+    });
     ssize_t read;
     do {
         read = ::pread(direct_fd_, destination.data(), destination.size(), file_offset(offset));

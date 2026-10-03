@@ -377,8 +377,10 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
                                workspace_plan.vision_bridge_bytes},
                     cancellation);
                 // Start the first item now so its window overlaps the decode rounds that run
-                // before this lane gets a prefill unit.
-                request.prefill->vision->submit_next_item();
+                // before this lane gets a prefill unit. This activation has not reserved its
+                // MainKV pages yet: an early loan must leave the selected plan's demand free.
+                request.prefill->vision->submit_next_item(
+                    request_plan.demand.reservation_added.device.main_kv_pages);
             } else {
                 request.prefill->vision = std::make_unique<execution::VisionPrefillSession>(
                     device, parameters,

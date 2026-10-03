@@ -27,6 +27,23 @@ ninfer_add_test(ninfer_qwen3_5_loading_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_loading.cpp"
   LIBRARIES ninfer_model_loading)
 
+ninfer_add_test(ninfer_model_suspend_test STANDALONE
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_model_suspend.cpp"
+  LIBRARIES ninfer_engine ninfer_core ninfer::json)
+set_tests_properties(ninfer_model_suspend_test PROPERTIES SKIP_RETURN_CODE 77)
+if(UNIX AND NOT APPLE)
+  ninfer_add_test(ninfer_suspend_restore_completion_test STANDALONE
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_suspend_restore_completion.cpp"
+    LIBRARIES ninfer_engine ninfer_core ninfer::json)
+  target_link_options(ninfer_suspend_restore_completion_test PRIVATE
+    -Wl,--wrap=cudaMemcpy -Wl,--wrap=cudaStreamSynchronize
+    -Wl,--wrap=cudaHostAlloc -Wl,--wrap=cudaFreeHost)
+  set_tests_properties(ninfer_suspend_restore_completion_test PROPERTIES SKIP_RETURN_CODE 77)
+  target_compile_definitions(ninfer_model_suspend_test PRIVATE NINFER_TEST_WRAP_SAMPLING=1)
+  target_link_options(ninfer_model_suspend_test PRIVATE
+    -Wl,--wrap=_ZN6ninfer7runtime16resolve_samplingERKNS_21ModelSamplingDefaultsENS_12SamplingModeERKNS_17SamplingOverridesE)
+endif()
+
 set_tests_properties(
   ninfer_qwen3_5_loading_real_test
   PROPERTIES SKIP_RETURN_CODE 77)
@@ -206,3 +223,8 @@ ninfer_add_test(ninfer_qwen3_5_structured_round_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_structured_round.cpp"
   LIBRARIES ninfer_model_runtime ninfer_core)
 set_tests_properties(ninfer_qwen3_5_structured_round_test PROPERTIES SKIP_RETURN_CODE 77)
+
+ninfer_add_test(ninfer_qwen3_5_suspend_real_test STANDALONE
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_suspend_real.cpp"
+  LIBRARIES ninfer_engine)
+set_tests_properties(ninfer_qwen3_5_suspend_real_test PROPERTIES SKIP_RETURN_CODE 77)

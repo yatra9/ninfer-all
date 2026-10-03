@@ -7,6 +7,14 @@ The examples use Qwen3.8-27B NVFP4 with FP8 KV storage.
 
 ## Text input
 
+`--enable-model-suspend` selects the same opt-in fixed-VA storage as the server. It requires
+single-GPU Generation and CUDA VMM and cannot be combined with the WDDM evictable budget.
+When enabled, snapshot storage defaults to a pinned Host buffer sized from persistent capacity,
+allocated before READY and retained until shutdown. `--suspend-snapshot-memory pageable` selects
+temporary ordinary Host storage instead. With suspend disabled neither mode allocates this buffer.
+The one-request CLI has no residency management commands; use the server's explicit
+[suspend/resume API](serving.md#explicit-model-suspend-and-resume) to share GPU memory between processes.
+
 ```bash
 ./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Summarize the difference between prefill and decode." \

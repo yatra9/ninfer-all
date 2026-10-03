@@ -57,6 +57,73 @@ When `--model-id` is omitted, the server advertises and accepts the artifact's `
 falling back to its architecture name when no name is stored. An explicit `--model-id` is a public
 HTTP alias override and does not select or alter model execution.
 
+## Explicit model suspend and resume
+
+Start with `--enable-model-suspend` to enable idle model residency management. This opt-in
+requires CUDA VMM and single-GPU Generation; the WDDM evictable budget cannot be combined with it.
+Without the flag, management operations return HTTP 400 `model_suspend_disabled`.
+
+Use the configured public model alias, including any `--model-id` override:
+
+```bash
+curl -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8080/v1/models/qwen3.8-27b/suspend
+curl http://127.0.0.1:8080/v1/models/qwen3.8-27b/residency
+curl -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8080/v1/models/qwen3.8-27b/resume
+```
+
+These routes use normal API-key authentication. Suspend accepts `{}` (default `auto_resume: true`)
+or an object containing only boolean `auto_resume`; resume accepts only `{}`. Use `{"auto_resume": false}` while another
+process needs exclusive use of the released GPU memory.
+Suspend immediately returns 409 `model_busy` while requests, media preparation, response
+reservations, context transfers or residency operations are active; it never cancels them.
+Repeated suspend while suspended updates `auto_resume` without GPU operations and returns HTTP 200;
+omitting the field resets it to true. Resume while ready returns the current state with HTTP 200.
+
+Suspend releases physical weight, persistent and workspace backing while retaining their virtual
+addresses, CUDA Graphs and CPU metadata. Persistent capacity is copied into host RAM;
+resume uploads weights from the original artifact and restores persistent bytes to the same addresses.
+Keep every artifact part unchanged and accessible until the process exits. Workspace receives fresh
+backing. Model/Program reconstruction does not occur. The public Engine itself remains explicitly
+managed; automatic resume is the serving admission policy for the current suspension.
+
+With `auto_resume: true`, valid generation requests to `/v1/chat/completions`, `/v1/responses` and
+`/v1/messages` resume a suspended model and execute after restoration. Concurrent requests share
+one resume and hold normal ingress reservations while waiting. Waiting counts toward the pending
+deadline; excess requests return 429, timeout returns 503 `request_queue_timeout`, and disconnected
+requests are cancelled without cancelling the shared restore. A failed resume returns 500
+`model_residency_error` to its waiting requests; later requests return 503 `model_error` without retry.
+Authentication, model ID and basic input validation precede automatic resume; SSE starts afterward.
+`auto_resume: false` rejects suspended generation with 503 `model_suspended`. Suspending and ERROR
+always reject generation; Resuming accepts waiters only with `auto_resume: true`. Model listing,
+status, token counting and Responses compact never initiate resume.
+`/health` reports 503 when unavailable. Model listing, residency status and
+diagnostics remain available. A fatal residency failure returns 500 for management operations and
+retains `last_error` and the persistent snapshot until process shutdown; restart the process to recover.
+Failed pool attachment releases pieces already created by that attempt. If cleanup itself fails,
+the remaining backing stays tracked for cleanup at shutdown and appears in residency byte counts.
+CPU-only zero-output submissions use the same admission boundary as residency transitions.
+
+The residency JSON reports state, enabled and `auto_resume` flags, known NInfer backing bytes, snapshot bytes,
+artifact-read/H2D byte counts and the last operation timings. Device byte counts exclude CUDA
+context/driver/graph allocations and VA reservations. VMM map, persistent D2H/H2D and weight upload
+are timed separately; weight restore includes transcode read/conversion/upload and the existing
+overlapped artifact-read/upload pipeline, including transcode-only loads. Persistent H2D completion
+is checked before snapshot invalidation and READY publication; asynchronous completion failures retain
+the snapshot and publish ERROR.
+With model suspend enabled, `--suspend-snapshot-memory pinned` is the default. Before READY,
+Program allocates one pinned Host buffer equal to its fixed persistent capacity and retains it
+until shutdown, reusing it for every suspend/resume. Allocation failure aborts startup; it does
+not silently select pageable memory. This RAM is needed while READY as well as while suspended,
+and is separate from the Host prefix cache budget. Disabling model suspend allocates no snapshot buffer.
+Select `--suspend-snapshot-memory pageable` for temporary ordinary Host RAM, allocated per suspend
+and released after successful resume. Its pages are prepared before D2H using up to four CPU
+workers for snapshots of at least 64 MiB. Neither mode clears the entire buffer before copying.
+`persistent_snapshot_bytes` counts valid restore data and is zero after successful resume.
+`persistent_snapshot_capacity_bytes` counts allocated Host storage, including idle pinned storage;
+`persistent_snapshot_pinned` reports whether that storage is pinned. ERROR retains valid snapshots.
+Persistent D2H timing includes stream drain and the copy, plus allocation/page preparation in
+pageable mode. The one-time pinned allocation contributes to startup time instead.
+
 Vision is disabled by default: its weights and Vision-specific unified-workspace extent are not
 allocated, and media requests and token-count requests fail with HTTP 400 `vision_disabled`. Add
 `--vision` when the server must accept image or video input. Speculative residency is likewise
@@ -101,7 +168,9 @@ process lifetime. `--vision-residency overlay` removes that cost on memory-tight
 lives in pinned host memory, the sequence plan reserves nothing for Vision, and each image is
 encoded inside a bounded window whose device memory is borrowed for the duration of the encode.
 
-A window is funded from free KV pages when they cover it. Those pages hold nothing, so nothing is
+A window is funded from free KV pages when whole physical lending pieces cover it. A piece that
+shares any live page stays mapped; fragmented free pages can therefore require the weight fallback.
+Those pages hold nothing, so nothing is
 copied, the text weights stay mapped, and the encode runs on its own stream while other lanes keep
 decoding: the lane that owns the image simply yields its prefill units until the encode completes.
 The pages are out of circulation while the loan is open, so the admission capacity shrinks with it
@@ -242,7 +311,7 @@ this adds a CPU synchronization point and mask transfers per round. No speedup c
 
 | Method and path | Behavior |
 |---|---|
-| `GET /health` | process health |
+| `GET /health` | inference availability; 503 during loading or non-ready residency |
 | `GET /v1/load` | serving capacity, current load, and monotonic token counters (see [Load](#load)) |
 | `GET /metrics` | Prometheus text with llama.cpp's `--metrics` series plus NInfer's (see [Metrics](#metrics)) |
 | `GET /stats` | the `/v1/load` snapshot plus the ingress peak and every Engine counter since startup (see [Stats](#stats)) |
@@ -251,6 +320,8 @@ this adds a CPU synchronization point and mask transfers per round. No speedup c
 | `GET /v1` | endpoint index for the announced API base: the model alias and this table |
 | `GET /v1/models` | configured OpenAI model alias, effective `max_model_len` (also as `context_window`), whether it accepts images, and a llama.cpp-compatible `meta` object (see [Models](#models)) |
 | `GET /v1/models/{id}` | lookup of the configured alias with the same fields |
+| `GET /v1/models/{id}/residency` | CPU snapshot of model residency and last operation metrics |
+| `POST /v1/models/{id}/suspend`, `POST /v1/models/{id}/resume` | idle residency management; suspend body `{}` or boolean `auto_resume` (default true), resume body `{}`; requires `--enable-model-suspend` |
 | `POST /v1/chat/completions` | OpenAI-style chat generation |
 | `POST /v1/responses` | OpenAI Responses Core generation, state, typed Items, and SSE |
 | `POST /v1/responses/input_tokens` | Responses prompt-token count without generation |
@@ -425,6 +496,10 @@ effective `max_model_len` (the `--max-context` ceiling, also as `context_window`
 
 `GET /v1/models/{id}` returns the same object for the single configured alias and a `404` for any
 other id.
+Aliases may include slashes or end in `/residency`. With `--model-id deployment/residency`,
+`GET /v1/models/deployment/residency` returns model detail, while
+`GET /v1/models/deployment/residency/residency` returns residency status. This also applies when
+suspend is disabled; the status then reports `enabled: false`.
 
 ## OpenAI Chat Completions
 
@@ -1252,6 +1327,8 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--response-store-max-records N` | maximum locally retained Responses objects | `1024` |
 | `--response-store-max-mib N` | total local Response envelope/Item/context budget | `256` |
 | `--kv-dtype bf16\|int8\|fp8\|rk8v4\|rk4v4\|rk4v4-e8\|nvfp4\|k8v4` | KV-cache storage. `rk8v4` is opt-in RotorQuant, `rk4v4` opt-in Lloyd-Max 4-bit keys and `rk4v4-e8` opt-in E8-lattice INT4 keys; all eight are accepted on this fork's sm_86/sm_89 targets | `bf16` |
+| `--enable-model-suspend` | enable single-GPU idle suspend/resume via the residency API | off |
+| `--suspend-snapshot-memory pinned\|pageable` | with model suspend enabled, retain a startup-sized pinned snapshot buffer or allocate temporary ordinary RAM per suspend | `pinned` |
 | `--spec mtp\|dflash\|dflash2` | speculative backend | off |
 | `--draft-tokens N` | `1..15` for MTP, DFlash and DFlash2 | unset |
 | `--lm-head-draft` | optimized proposal head | off |
@@ -1290,7 +1367,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--cache-taps-per-request N` | hybrid: new prefill state snapshots per request (`0..64`) | `8`; `2` without a Host tier |
 | `--cache-tap-ladder N` | hybrid: history-snapshot ladder base G; flexible taps at `prompt − G·2^k` | `max(4096, 2 * prefill-chunk)` |
 | `--cache-tap-min-gap N` | hybrid: minimum tokens between ladder snapshots | `max(1024, prefill-chunk)` |
-| `--prefix-cache-file PATH` | hybrid: at startup, restore the Host tier from `PATH` if the file exists; on clean shutdown (Ctrl+C, Ctrl+Break, or closing the console window), save it there (every Host-backed snapshot and the block path it resumes through). Windows ends a closing console's process about 5 s after the close; a save still running then is abandoned and the previous file kept, so stop large caches with Ctrl+C. `PATH` may be relative (resolved against the launch directory) or absolute, e.g. `--prefix-cache-file "e:\NInfer-Deploy-V3\file.cache"`. Its directory must exist, and the flag needs a Host tier (not `--host-cache-mib 0`). A file written for another artifact, KV format, speculative backend, RoPE scaling or `ninfer-serve` binary is ignored and replaced at shutdown. The startup log reports what was restored. Saving writes up to `--host-cache-mib` of data. | off: nothing is saved or restored |
+| `--prefix-cache-file PATH` | hybrid: at startup, restore the Host tier from `PATH` if the file exists; on clean shutdown (Ctrl+C, Ctrl+Break, or closing the console window), save it there (every Host-backed snapshot and the block path it resumes through), including clean shutdown while Suspended; that save reads Host data without resuming the model. A residency ERROR does not save the cache. Windows ends a closing console's process about 5 s after the close; a save still running then is abandoned and the previous file kept, so stop large caches with Ctrl+C. `PATH` may be relative (resolved against the launch directory) or absolute, e.g. `--prefix-cache-file "e:\NInfer-Deploy-V3\file.cache"`. Its directory must exist, and the flag needs a Host tier (not `--host-cache-mib 0`). A file written for another artifact, KV format, speculative backend, RoPE scaling or `ninfer-serve` binary is ignored and replaced at shutdown. The startup log reports what was restored. Saving writes up to `--host-cache-mib` of data. | off: nothing is saved or restored |
 | `--device-state-slots N` | extra Device checkpoint StateImages beyond the active-lane guarantee | `max-concurrency` |
 | `--host-state-slots N` | pinned Host StateImage capacity | `8` |
 | `--host-kv-mib N` | shared pinned Host Main/Backend KV byte capacity in MiB | `8192` |

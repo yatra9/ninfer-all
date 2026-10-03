@@ -244,7 +244,7 @@ int run_tests() {
                                         "--vision-offload",
                                         "--vision-residency",
                                         "--vram-headroom-mib",
-                                        "--wddm-evictable-budget"}) {
+                                        "--wddm-evictable-budget", "--enable-model-suspend"}) {
         const std::string message = "CLI help omits " + std::string(flag);
         failures += check(help.find(flag) != std::string::npos, message.c_str());
     }
@@ -258,6 +258,27 @@ int run_tests() {
               "CLI help omits a production KV storage mode");
     const ninfer::cli::Options route_defaults =
         parse({"ninfer-cli", "model.ninfer", "--prompt", "hello"});
+    const auto suspend = parse({"ninfer-cli", "model.ninfer", "--prompt", "hello", "--enable-model-suspend"});
+    failures += check(suspend.enable_model_suspend && !route_defaults.enable_model_suspend,
+                      "CLI suspend flag must be explicit");
+    failures += check(suspend.suspend_snapshot_memory == ninfer::SuspendSnapshotMemory::Pinned,
+                      "CLI suspend snapshot must default to pinned");
+    const auto pageable = parse({"ninfer-cli", "model.ninfer", "--prompt", "hello",
+                                "--enable-model-suspend", "--suspend-snapshot-memory", "pageable"});
+    failures += check(pageable.suspend_snapshot_memory == ninfer::SuspendSnapshotMemory::Pageable,
+                      "CLI did not select pageable suspend snapshot");
+    for (const char* memory : {"pinned", "invalid", ""}) {
+        bool rejected = false;
+        try {
+            if (*memory) {
+                const auto parsed = parse({"ninfer-cli", "model.ninfer", "--prompt", "hello",
+                                           "--suspend-snapshot-memory", memory});
+                failures += check(parsed.suspend_snapshot_memory == ninfer::SuspendSnapshotMemory::Pinned,
+                                  "CLI explicit pinned selection failed");
+            } else { (void)parse({"ninfer-cli", "model.ninfer", "--prompt", "hello", "--suspend-snapshot-memory"}); }
+        } catch (const std::invalid_argument&) { rejected = true; }
+        failures += check(rejected == (std::string(memory) != "pinned"), "CLI accepted invalid snapshot memory");
+    }
     failures += check(!route_defaults.prefill_cublas && route_defaults.prefill_cublas_projections &&
                           route_defaults.speculative.lookup_ngram == 0,
                       "the cuBLAS prefill route or context lookup is on by default");

@@ -50,14 +50,16 @@ std::unique_ptr<EvictableKVPool> make_kv_arena(DeviceContext& device,
         throw std::logic_error("overlay Vision weight pool has no captured window");
     }
     const std::size_t window      = pool->window_capacity_bytes();
-    const std::size_t granularity = EvictableKVPool::device_granularity(device);
+    const std::size_t granularity = EvictableKVPool::lending_granularity(device);
     if (window == 0 || granularity == 0 || plan.persistent.lendable_kv_end_bytes == 0) {
         return nullptr;
     }
     // A KV cache smaller than one window can never fund a concurrent encode. The Engine still runs:
     // every window then borrows the weight tail.
     const std::size_t lendable = plan.persistent.lendable_kv_end_bytes / granularity * granularity;
-    if (window > lendable) { return nullptr; }
+    if (window / granularity + (window % granularity != 0) > lendable / granularity) {
+        return nullptr;
+    }
     return std::make_unique<EvictableKVPool>(
         device, EvictableKVPool::Config{
                     .arena_bytes           = plan.persistent.bytes,
@@ -156,9 +158,9 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
       kv_payload_bytes(plan.persistent.kv_payload_bytes),
       graph_allowance_bytes(plan.graph_allowance_bytes), workspace_plan(plan.workspace),
       kv_arena(make_kv_arena(device_in, parameters_in, plan)),
-      persistent(kv_arena ? DeviceArena(kv_arena->arena()) : DeviceArena(plan.persistent.bytes)),
+      persistent(kv_arena ? DeviceArena(kv_arena->arena()) : DeviceArena(plan.persistent.bytes, parameters_in.model.options().enable_model_suspend)),
       persistent_by_rank(make_rank_persistent(device_in, plan.persistent.extra_rank_bytes)),
-      workspace_storage(plan.workspace.capacity),
+      workspace_storage(plan.workspace.capacity, parameters_in.model.options().enable_model_suspend),
       workspace_storage_by_rank(
           make_rank_workspaces(device_in, parameters_in.text, plan.workspace.general_capacity)),
       work(DeviceSpan{workspace_storage.base(), plan.workspace.general_capacity}),
@@ -543,6 +545,10 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
     work.reset_peak();
     workspace_logical_peak_bytes = 0;
     create_hybrid_prefix_cache(startup_observer);
+    if (plan.features.enable_model_suspend &&
+        plan.features.suspend_snapshot_memory == SuspendSnapshotMemory::Pinned) {
+        residency_pinned_snapshot.emplace(persistent.capacity());
+    }
 }
 
 void ProgramImpl::synchronize_transfer_streams() const {
@@ -552,7 +558,7 @@ void ProgramImpl::synchronize_transfer_streams() const {
 }
 
 ProgramImpl::~ProgramImpl() noexcept {
-    flush_disk_tier();
+    if (residency_storage_intact) { flush_disk_tier(); }
     for (std::size_t rank = 0; rank < transfer_streams.size(); ++rank) {
         (void)cudaStreamSynchronize(transfer_streams[rank]);
         (void)cudaStreamSynchronize(compute_streams[rank]);

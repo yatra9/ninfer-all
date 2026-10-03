@@ -4,12 +4,15 @@
 #include "product/local_video/local_video_url.h"
 #include "serve/console_log.h"
 #include "serve/translate.h"
+#include "serve/model_residency.h"
 
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <exception>
 #include <iterator>
 #include <mutex>
 #include <stdexcept>
@@ -25,6 +28,11 @@ struct RequestCapacity {
     std::size_t active = 0;
     std::size_t peak   = 0;
     const std::size_t maximum;
+    bool residency_operation = false;
+    bool resume_operation = false;
+    bool auto_resume = true;
+    std::condition_variable residency_cv;
+    std::exception_ptr resume_error;
 };
 
 struct RequestLifetime {
@@ -348,6 +356,8 @@ ninfer::EngineOptions make_engine_options(const ServeOptions& options) {
     engine_options.cuda_graph_allowance_bytes =
         static_cast<std::size_t>(options.cuda_graph_allowance_mib) << 20;
     engine_options.wddm_evictable_budget    = options.wddm_evictable_budget;
+    engine_options.enable_model_suspend    = options.enable_model_suspend;
+    engine_options.suspend_snapshot_memory = options.suspend_snapshot_memory;
     engine_options.mlp_a8_decode            = options.mlp_a8_decode;
     engine_options.prefill_a8               = options.prefill_a8;
     engine_options.prefill_cublas           = options.prefill_cublas;
@@ -400,16 +410,149 @@ std::size_t GenerationService::admitted_requests() const {
     return request_capacity_->active;
 }
 
+ServiceResidencyStatus GenerationService::residency() const {
+    std::lock_guard lock(request_capacity_->mutex);
+    return {engine_->residency(), request_capacity_->auto_resume};
+}
+
+ServiceResidencyStatus GenerationService::change_residency(bool suspend_requested, bool auto_resume) {
+    {
+        std::lock_guard lock(request_capacity_->mutex);
+        if (request_capacity_->residency_operation) {
+            throw ModelResidencyError(ModelResidencyErrorKind::Busy, "model residency transition is active");
+        }
+        const auto status = engine_->residency();
+        const auto desired = suspend_requested ? ModelResidencyState::Suspended : ModelResidencyState::Ready;
+        if (status.enabled && status.state == desired) {
+            if (suspend_requested) { request_capacity_->auto_resume = auto_resume; }
+            return {status, request_capacity_->auto_resume};
+        }
+        if (status.enabled && status.state != ModelResidencyState::Error && request_capacity_->active != 0) {
+            throw ModelResidencyError(ModelResidencyErrorKind::Busy, "model has admitted requests or media preparation");
+        }
+        // Serialize the service admission reservation with transition start. EngineCore still owns
+        // all model states and GPU exclusion. Do not hold the capacity lock during transfers.
+        request_capacity_->residency_operation = true;
+        request_capacity_->resume_operation = !suspend_requested;
+        request_capacity_->resume_error = nullptr;
+    }
+    const auto finish = [&] {
+        std::lock_guard lock(request_capacity_->mutex);
+        request_capacity_->residency_operation = false;
+        request_capacity_->resume_operation = false;
+        request_capacity_->residency_cv.notify_all();
+    };
+    try {
+        auto status = suspend_requested ? engine_->suspend() : engine_->resume();
+        {
+            std::lock_guard lock(request_capacity_->mutex);
+            if (suspend_requested) { request_capacity_->auto_resume = auto_resume; }
+            request_capacity_->residency_operation = false;
+            request_capacity_->resume_operation = false;
+            request_capacity_->residency_cv.notify_all();
+            return {status, request_capacity_->auto_resume};
+        }
+    } catch (...) {
+        {
+            std::lock_guard lock(request_capacity_->mutex);
+            request_capacity_->resume_error = std::current_exception();
+        }
+        finish();
+        throw;
+    }
+}
+
+void GenerationService::require_available(bool allow_auto_resume) const {
+    std::lock_guard lock(request_capacity_->mutex);
+    require_available_locked(allow_auto_resume);
+}
+
+void GenerationService::require_available_locked(bool allow_auto_resume) const {
+    const auto status = engine_->residency();
+    if (allow_auto_resume && status.enabled && request_capacity_->auto_resume &&
+        ((status.state == ModelResidencyState::Suspended &&
+          (!request_capacity_->residency_operation || request_capacity_->resume_operation)) ||
+         (status.state == ModelResidencyState::Resuming && request_capacity_->resume_operation))) {
+        return;
+    }
+    if (status.state != ModelResidencyState::Ready) {
+        ApiError error;
+        error.status = 503;
+        error.type = "model_unavailable";
+        switch (status.state) {
+        case ModelResidencyState::Suspending: error.code = "model_suspending"; break;
+        case ModelResidencyState::Suspended: error.code = "model_suspended"; break;
+        case ModelResidencyState::Resuming: error.code = "model_resuming"; break;
+        case ModelResidencyState::Error: error.code = "model_error"; break;
+        default: break;
+        }
+        error.message = "Model is unavailable: " + error.code;
+        throw ApiException(std::move(error));
+    }
+    if (!engine_->is_available()) {
+        throw_request_error(RequestError(RequestErrorKind::Unavailable, "inference engine is unavailable"));
+    }
+}
+
+void GenerationService::ensure_generation_ready(const RequestLifetime& lifetime,
+                                                const std::function<bool()>& is_cancelled) const {
+    check_preparation_control(lifetime.deadline, is_cancelled);
+    std::unique_lock lock(request_capacity_->mutex);
+    while (request_capacity_->residency_operation) {
+        if (!request_capacity_->resume_operation) {
+            throw_request_error(RequestError(RequestErrorKind::Unavailable, "model residency transition is starting"));
+        }
+        request_capacity_->residency_cv.wait_for(lock, std::chrono::milliseconds(50));
+        lock.unlock();
+        check_preparation_control(lifetime.deadline, is_cancelled);
+        lock.lock();
+    }
+    if (request_capacity_->resume_error && engine_->residency().state == ModelResidencyState::Error) {
+        try { std::rethrow_exception(request_capacity_->resume_error); }
+        catch (const ModelResidencyError& error) { throw ApiException(residency_error_to_api_error(error)); }
+    }
+    const auto status = engine_->residency();
+    if (status.state != ModelResidencyState::Suspended) {
+        require_available_locked(false);
+        return;
+    }
+    require_available_locked(true);
+    request_capacity_->residency_operation = true;
+    request_capacity_->resume_operation = true;
+    request_capacity_->resume_error = nullptr;
+    lock.unlock();
+    std::exception_ptr failure;
+    try { (void)engine_->resume(); }
+    catch (...) { failure = std::current_exception(); }
+    lock.lock();
+    request_capacity_->resume_error = failure;
+    request_capacity_->residency_operation = false;
+    request_capacity_->resume_operation = false;
+    request_capacity_->residency_cv.notify_all();
+    lock.unlock();
+    if (failure) {
+        try { std::rethrow_exception(failure); }
+        catch (const ModelResidencyError& error) { throw ApiException(residency_error_to_api_error(error)); }
+    }
+    // A disconnected leader still completes the shared restore; it only cancels its own request.
+    check_preparation_control(lifetime.deadline, is_cancelled);
+}
+
 std::size_t GenerationService::peak_admitted_requests() const {
     std::lock_guard lock(request_capacity_->mutex);
     return request_capacity_->peak;
 }
 
 std::shared_ptr<RequestLifetime>
-GenerationService::acquire_request_lifetime(DeadlinePolicy deadline_policy) const {
+GenerationService::acquire_request_lifetime(DeadlinePolicy deadline_policy, bool allow_auto_resume) const {
     const auto started = Clock::now();
     {
         std::lock_guard lock(request_capacity_->mutex);
+        require_available_locked(allow_auto_resume);
+        if (request_capacity_->residency_operation &&
+            !(allow_auto_resume && request_capacity_->auto_resume && request_capacity_->resume_operation)) {
+            throw_request_error(RequestError(RequestErrorKind::Unavailable, "model residency transition is starting"));
+        }
         if (request_capacity_->active >= request_capacity_->maximum) {
             throw_request_error(ninfer::RequestError(RequestErrorKind::Overloaded,
                                                      "inference request queue is full"));
@@ -477,7 +620,8 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& incomin
         const std::invalid_argument error("Vision is disabled for this server");
         throw_invalid_input(error, "vision_disabled");
     }
-    prepared.lifetime = acquire_request_lifetime(deadline_policy);
+    prepared.lifetime = acquire_request_lifetime(deadline_policy, true);
+    ensure_generation_ready(*prepared.lifetime, is_cancelled);
 
     try {
         const auto acquisition_started = Clock::now();
@@ -540,6 +684,7 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& incomin
 
 int GenerationService::count_prompt_tokens(const GenerationRequest& request,
                                            std::function<bool()> is_cancelled) const {
+    const auto lifetime = acquire_request_lifetime(DeadlinePolicy::ClientPendingTimeout);
     const bool request_has_media = request.media_item_count() != 0;
     if (request_has_media && !options_.enable_vision) {
         const std::invalid_argument error("Vision is disabled for this server");

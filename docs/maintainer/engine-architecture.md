@@ -218,7 +218,67 @@ GenerationCore 或 CausalScoreCore 在实例准备完成后使用它。
 
 模型配置、绑定和权重地址在实例存活期间固定；每个 Program 独占自己的可变 State/KV、
 workspace 和 Graph。销毁时先结束 Engine core 和未决设备工作，再销毁实例的 Program、
-Frontend 和 Parameters，最后释放 Model backing。Reader 与上传 staging 属于加载生命周期。
+Frontend 和 Parameters，最后释放 Model backing。默认情况下 Reader 与上传 staging 属于加载生命周期。
+启用 model suspend 时，Model backing 保留地址稳定的 Reader 和仅含 Device placement 的恢复计划；
+Host/Pinned payload 不重复保留。恢复复用初次加载的范围合并、staging、transcode 和上传实现，
+写入原有 Device destination，既有 parent、binding 与 Parameters 不重建。
+Device payload 的 direct read 最多两路并行，预读限于原有最多四个 64 MiB pinned slot。
+只有文件读取在 CPU worker 执行；CUDA 上传和 slot event 在调用者当前 rank 上管理。
+错误时先停止并 join reader，再 drain transfer stream，之后才释放 staging。
+
+启用 suspend 的单 GPU Program 为 persistent 与 workspace 保留固定 VA。空闲时，persistent 的
+完整 capacity 原始字节写入 Host RAM；恢复保持 CPU cache/lease 元数据和所有 Graph，
+将完整快照写回原 VA。`suspend_snapshot_memory`默认 Pinned：Program 初始化完成前按 persistent capacity
+分配一次 pinned buffer，直到关闭都保留并重复使用。分配失败令启动失败，不隐式 fallback；suspend
+未启用时不分配。Pageable 模式惰性分配普通 Host RAM，在 D2H 前以 4 KiB 间隔及末尾单字节提交 Host page，不清零整个
+buffer。64 MiB 以上用最多四个 CPU worker，较小快照由调用者处理；所有 worker join 后才开始
+D2H。OS 拒绝创建线程时，调用者完成剩余页面；Host 分配异常时先 join 再释放 buffer。
+Pageable 的页面准备包含在 snapshot D2H 时间内，成功恢复后释放 RAM。Pinned 的分配计入启动时间。
+两种模式只在 D2H 成功后将 snapshot 标记有效；成功恢复后清除此标记，Pinned buffer 仍保留。
+状态报告区分有效 snapshot bytes、已分配 Host capacity 和实际 pinned 标志；ERROR 保留有效 snapshot。
+workspace 使用新的 physical backing，不保存旧内容；scratch 与 Vision bridge
+在使用前写入。检查覆盖 request、context transaction、Vision window、pool loan，以及 compute、transfer、
+Vision 和 hybrid cache 独立 restore stream。detach 开始后，关闭时不执行读取 Device 的 reset 或 disk spill。
+
+Physical ownership stays with the actual allocator: ordinary Model storage is owned by the
+artifact materialization arenas; overlay weights are owned by `EvictableWeightPool`, with
+borrowed Model arena views. Program owns workspace storage and either an owning persistent
+arena or an `EvictableKVPool` with a borrowed persistent view. CPU page/slot/cache bookkeeping,
+limited overlay mirrors, pinned Vision weights/results and ingress/egress buffers remain alive.
+The KV pool's physical lending size is the private `kLendingPieceBytes` tuning constant in
+`core/evictable_kv_pool.cu`, rounded to the hardware VMM granularity. It is independent of logical
+64-token KV pages. Only whole pieces within free, unpromised payload pages can fund Vision;
+otherwise the existing weight-tail tier remains available. Plane eligibility uses an 8 KiB
+minimum page stride rather than a fixed page count per piece. The final resident remainder and
+total physical capacity still use hardware granularity, so tuning adds no Host buffer or Device
+capacity. Stable pointers, lease rollback/return ownership and full-arena snapshots are unchanged.
+Before an activation has physical reservations, early Vision submission passes the selected
+materialization plan's pending MainKV demand through the execution session to the loan planner.
+That capacity cannot be lent. If the window cannot fit, early submission is skipped and the normal
+encode chooses its tier after activation reserves the request's pages. Hybrid/subsequent submissions
+already have reservations, which the physical pool accounts for directly.
+Whole-persistent snapshot includes prefill hidden state, sampling/token-count/grammar controls,
+KV and execution tables, StateImages and speculative replay/state. Workspace layout comes from
+the startup Op plans and contains only per-unit scratch and the transient Vision bridge;
+cross-request values belong to persistent storage or host-owned state. Single-GPU suspend excludes
+pipeline stage-link allocations; CUDA context/modules/streams/events/Graph resources remain resident.
+
+Engine 的 `suspend()`、`resume()` 与 `residency()` 是 residency 管理入口。EngineCore 独占状态；
+状态与 admission 使用同一个短 queue lock。管理操作之间及与 worker execution 的竞争使用 try-lock，
+outstanding reservation、pending 或 Program 忙时立即失败，不取消或清空请求。传输期间不持有 queue lock；
+状态查询只读已发布的 CPU snapshot。非 READY 状态拒绝 submit（包括零输出立即完成），worker 不启动
+Device 操作。shutdown 与 residency 操作串行，失败后保持 ERROR、诊断与 snapshot，禁止隐式 resume。
+正常 SUSPENDED shutdown 仍保存已配置的 Hybrid Host prefix cache。成功 detach 保留 Host-only 保存资格，
+restore 开始或 residency ERROR 撤销资格；保存只读取已完成写入的 Host slabs 和 CPU index，不访问 GPU backing。
+
+GenerationService 在同一短 capacity lock 下协调 admission reservation 与管理操作入口，
+并拥有每次 HTTP suspend 的 auto_resume 方针（省略为 true）。生成请求在协议验证后占用既有 ingress
+reservation，首请求调用显式 Engine resume；其余请求通过 condition variable 等待同次 restore，等待受
+pending deadline 与取消约束。leader 取消不会中断共有 restore。auto_resume=false、ERROR、状态/token
+查询不自动恢复；Engine 不拥有 HTTP 方针，也不在 submit 内隐式恢复。
+因此尚在 media acquisition、token counting 或 response lifetime 的请求也返回 Busy。
+capacity lock 不跨 snapshot/upload 持有；它不拥有第二套模型状态。HTTP 认证后、解析/获取 media
+及开启 SSE 前检查 Engine availability；最终 service admission 与 Engine submit 仍再次检查。
 
 权重、State/KV backing、block-table matrices、workspace 与 CUDA Graph resources 在 Engine 开始接受请求前
 建立。运行期改变 ownership、mapping、frontier 与 replica placement，但不重建这些大块 Device allocations。

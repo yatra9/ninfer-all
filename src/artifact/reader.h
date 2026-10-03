@@ -34,6 +34,9 @@ public:
     [[nodiscard]] ObjectHandle find(std::string_view id) const;
     [[nodiscard]] const WeightGeometry& geometry(ObjectHandle handle) const;
     void validate_object(ObjectHandle handle) const;
+    // Opt-in residency restore: capture only files already opened by the selected load.
+    void capture_source_identity() const;
+    void verify_source_unchanged() const;
 
     [[nodiscard]] std::vector<ReadSegment> segments(std::uint64_t offset,
                                                     std::uint64_t bytes) const;

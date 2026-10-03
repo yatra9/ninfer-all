@@ -21,6 +21,11 @@ namespace ninfer::serve {
 struct RequestLifetime;
 struct RequestCapacity;
 
+// HTTP admission policy belongs to serving; Engine residency remains explicit.
+struct ServiceResidencyStatus : ModelResidencyStatus {
+    bool auto_resume = true;
+};
+
 struct GenerationMetrics {
     double prepare_seconds = 0.0;
     double ttft_seconds    = 0.0;
@@ -149,6 +154,10 @@ public:
     [[nodiscard]] ninfer::RuntimeStats runtime_stats() const { return engine_->runtime_stats(); }
 
     [[nodiscard]] bool is_available() const { return engine_->is_available(); }
+    [[nodiscard]] ServiceResidencyStatus residency() const;
+    [[nodiscard]] ServiceResidencyStatus suspend(bool auto_resume = true) { return change_residency(true, auto_resume); }
+    [[nodiscard]] ServiceResidencyStatus resume() { return change_residency(false); }
+    void require_available(bool allow_auto_resume = false) const;
 
     // Requests currently holding ingress capacity (max_concurrency + max_pending_requests).
     [[nodiscard]] std::size_t admitted_requests() const;
@@ -178,6 +187,10 @@ public:
     void warmup();
 
 private:
+    ServiceResidencyStatus change_residency(bool suspend_requested, bool auto_resume = true);
+    void require_available_locked(bool allow_auto_resume) const;
+    void ensure_generation_ready(const RequestLifetime& lifetime,
+                                 const std::function<bool()>& is_cancelled) const;
     enum class CacheParticipation : std::uint8_t {
         Disabled,
         ReadWrite,
@@ -194,7 +207,7 @@ private:
                  std::function<bool()> is_cancelled, ContextCacheHints context_cache,
                  CacheParticipation cache_participation, DeadlinePolicy deadline_policy) const;
     [[nodiscard]] std::shared_ptr<RequestLifetime>
-    acquire_request_lifetime(DeadlinePolicy deadline_policy) const;
+    acquire_request_lifetime(DeadlinePolicy deadline_policy, bool allow_auto_resume = false) const;
 
     ServeOptions options_;
     std::unique_ptr<ninfer::Engine> engine_;

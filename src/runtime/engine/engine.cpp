@@ -229,9 +229,16 @@ public:
         }
         // The generation core's orderly stop saves the Host tier before it drops it.
         core.emplace<std::monostate>();
-        try {
-            device.synchronize();
-        } catch (...) {}
+        if (options.enable_model_suspend) {
+            // Residency failure can leave CUDA in an error state. CUDA_CHECK would abort here;
+            // destruction drains best-effort and lets each owner release tracked backing.
+            device.bind_to_current_thread_noexcept();
+            (void)cudaStreamSynchronize(device.stream);
+            (void)cudaStreamSynchronize(device.transfer_stream);
+            if (device.vision_stream) { (void)cudaStreamSynchronize(device.vision_stream); }
+        } else {
+            try { device.synchronize(); } catch (...) {}
+        }
         if (persists) { report_prefix_cache_save(); }
     }
 
@@ -382,6 +389,9 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
     if (impl_->options.purpose != EnginePurpose::Generation) {
         throw std::logic_error("submit requires a Generation Engine");
     }
+    if (!is_available()) {
+        throw RequestError(RequestErrorKind::Unavailable, "inference engine is unavailable");
+    }
     if (prompt.impl_ == nullptr) { throw std::invalid_argument("PreparedPrompt is empty"); }
     if (observation.live_timings) { observation.phase_timings = true; }
     if (consumer_mode != OutputConsumerMode::Streaming &&
@@ -422,8 +432,16 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
         immediate.result.timings.prepare_seconds    = prepare_seconds;
         immediate.result.timings.total_seconds      = prepare_seconds;
         prompt.impl_.reset();
-        return GenerationHandle(std::make_unique<GenerationHandle::Impl>(
-            impl_, std::move(immediate), resolved_sampling));
+        return std::visit([&](auto& core) -> GenerationHandle {
+            if constexpr (requires { core->accept_immediate_submission([] {}); }) {
+                return core->accept_immediate_submission([&] {
+                    return GenerationHandle(std::make_unique<GenerationHandle::Impl>(
+                        impl_, std::move(immediate), resolved_sampling));
+                });
+            } else {
+                throw std::logic_error("Engine generation core is unavailable");
+            }
+        }, impl_->core);
     }
 
     return std::visit(
@@ -512,6 +530,28 @@ bool Engine::is_available() const {
             }
         },
         impl_->core);
+}
+
+ModelResidencyStatus Engine::residency() const {
+    if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
+    return std::visit([](const auto& core) -> ModelResidencyStatus {
+        if constexpr (requires { core->residency(); }) { return core->residency(); }
+        else { return {}; }
+    }, impl_->core);
+}
+ModelResidencyStatus Engine::suspend() {
+    if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
+    return std::visit([](auto& core) -> ModelResidencyStatus {
+        if constexpr (requires { core->suspend(); }) { return core->suspend(); }
+        else { throw ModelResidencyError(ModelResidencyErrorKind::Unsupported, "model suspend requires Generation"); }
+    }, impl_->core);
+}
+ModelResidencyStatus Engine::resume() {
+    if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
+    return std::visit([](auto& core) -> ModelResidencyStatus {
+        if constexpr (requires { core->resume(); }) { return core->resume(); }
+        else { throw ModelResidencyError(ModelResidencyErrorKind::Unsupported, "model suspend requires Generation"); }
+    }, impl_->core);
 }
 
 void Engine::reset_memory_peaks() noexcept {

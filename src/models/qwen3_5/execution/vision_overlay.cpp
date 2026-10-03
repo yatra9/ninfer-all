@@ -108,13 +108,14 @@ void VisionResidencyBroker::enable_kv_tier(EvictableKVPool& arena, DeviceKVPageP
     on_change_ = std::move(on_change);
 }
 
-std::optional<VisionWindow> VisionResidencyBroker::try_acquire_kv(std::size_t bytes) {
+std::optional<VisionWindow> VisionResidencyBroker::try_acquire_kv(std::size_t bytes,
+                                                               std::uint32_t pending_pages) {
     require_closed();
     if (kv_arena_ == nullptr || kv_pages_ == nullptr || kv_arena_->poisoned() ||
         (can_lend_ && !can_lend_())) {
         return std::nullopt;
     }
-    KVLoanPlan plan = plan_kv_loan(*kv_arena_, *kv_pages_, bytes);
+    KVLoanPlan plan = plan_kv_loan(*kv_arena_, *kv_pages_, bytes, pending_pages);
     if (plan.granules.empty()) { return std::nullopt; }
     // Lending mutates the page pool before any VisionWindow owns the loan, so a throw part-way
     // through this loop would strand the runs already lent: capacity the pool never gets back,
@@ -440,7 +441,8 @@ void VisionOverlaySession::begin(VisionWindow&& window, std::span<const std::uin
 }
 
 bool VisionOverlaySession::submit_item(std::span<const std::uint16_t> patches,
-                                       const qwen3_5::VisionItemControl& control) {
+                                       const qwen3_5::VisionItemControl& control,
+                                       std::uint32_t pending_pages) {
     if (pending_) { throw std::logic_error("a Vision item is already in flight"); }
     // Early submission is opportunistic: another session's window keeps this item synchronous.
     if (broker_.window_open()) { return false; }
@@ -448,7 +450,8 @@ bool VisionOverlaySession::submit_item(std::span<const std::uint16_t> patches,
     // Only a KV-funded window may stay open across unit boundaries: a weight-tail window unmaps
     // Text weights, which would stop every other lane.
     std::optional<VisionWindow> borrowed =
-        broker_.try_acquire_kv(staging_align(layout_.staging_bytes) + plan.capacity_bytes);
+        broker_.try_acquire_kv(staging_align(layout_.staging_bytes) + plan.capacity_bytes,
+                               pending_pages);
     if (!borrowed) { return false; }
     window_start_ = Clock::now();
     try {

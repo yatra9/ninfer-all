@@ -41,6 +41,17 @@ docker run --rm --gpus all \
 
 The API is available at `http://127.0.0.1:8080/v1`.
 
+To share the GPU with another process, add `--enable-model-suspend` and use the
+[residency API](serving.md#explicit-model-suspend-and-resume). Suspend is disabled
+by default. When enabled, the default pinned snapshot is sized at startup and
+retained while READY as well as while suspended; `--suspend-snapshot-memory pageable`
+selects temporary Host storage. Place the artifact on native Linux storage for
+restore performance; on WSLC, use a named model volume as described in the
+[acceptance guide](../tools/suspend-dev/README.md#real-model-acceptance).
+Keep all artifact parts available and unchanged until shutdown. Building this
+Dockerfile includes the feature and tuning constants without additional build flags;
+GPU execution still requires the runtime GPU access shown above.
+
 ## Native Ubuntu 24.04 build
 
 Install the CUDA Toolkit 12.8 or newer from NVIDIA.

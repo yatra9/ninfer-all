@@ -148,6 +148,8 @@ public:
                                  cudaStream_t producer, cudaStream_t transfer);
     // Publishes every completed Host write. Non-blocking.
     void poll();
+    // Nonblocking completion publication with exceptions instead of CUDA_CHECK abort.
+    void poll_for_residency();
 
     // Nodes and snapshots stay pinned while a Host write or a landing restore is in flight. When
     // those pins are all that stands between the pools and a request, waiting a few milliseconds
@@ -158,6 +160,8 @@ public:
 
     // Waits for every Host write and landing restore and publishes them.
     void drain();
+    // Residency checks must include this independently owned restore stream.
+    [[nodiscard]] cudaStream_t residency_restore_stream() const noexcept { return restore_stream_; }
 
     // ---- Host restores (one admission staged at a time) --------------------------------------
     // Opens a restore batch ordered after the producer's queued work (Device destinations may have
@@ -286,6 +290,7 @@ private:
     std::vector<PinnedHostBuffer> host_chunks_;
     std::uint32_t slabs_per_chunk_ = 0;
     cudaStream_t restore_stream_   = nullptr;
+    void poll_impl(bool residency);
     std::vector<std::optional<HybridBlockPages>> blocks_;
     std::vector<std::uint32_t> free_blocks_;
     std::vector<StateImageHandle> images_;

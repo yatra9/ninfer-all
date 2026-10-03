@@ -251,23 +251,23 @@ only when that work is in scope. Install or upgrade dependencies only when the t
 Create commits only when requested. Use Conventional Commit subjects with concise lowercase types
 such as `feat`, `fix`, `perf`, `bench`, `test`, `build`, `refactor`, `docs`, or `chore`.
 
-### ninfer-video work checkpoints
+### ninfer-suspend work checkpots
 
-The user has explicitly requested commits throughout the `ninfer-video` implementation. Commit each
+The user has explicitly requested commits throughout the `ninfer-suspend` implementation. Commit each
 coherent, independently reviewable unit after its relevant checks pass. Do not accumulate unrelated
 plan phases or leave an implemented unit uncommitted while starting the next one.
 
 Before every commit:
 
-1. Update `PLAN_VIDEO.md` with the exact implementation status: completed work, validation performed,
+1. Update `PLAN_SUSPEND.md` with the exact implementation status: completed work, validation performed,
    known limitations or unresolved findings, and the next concrete task. It must be sufficient for
    a fresh session with no conversation history to resume immediately.
 2. If the implementation changes, resolves, or invalidates a requirement or decision, update
-   `SPEC_VIDEO.md` in the same work unit. Do not leave the implementation and specification in conflict.
+   `SPEC_SUSPEND.md` in the same work unit. Do not leave the implementation and specification in conflict.
 3. Update affected repository documentation, command help, examples, build instructions, and active
    architectural references so they describe the committed behavior.
 4. Review the complete diff and run the checks appropriate to that unit. Record checks that could
-   not run and why in `PLAN_VIDEO.md`.
+   not run and why in `PLAN_SUSPEND.md`.
 
-`PLAN_VIDEO.md` and `SPEC_VIDEO.md` live at the repository root and are part of the commit. Each
-repository commit must leave the branch usable and its next step explicit in `PLAN_VIDEO.md`.
+`PLAN_SUSPEND.md` and `SPEC_SUSPEND.md` live at the repository root and are part of the commit. Each
+repository commit must leave the branch usable and its next step explicit in `PLAN_SUSPEND.md`.

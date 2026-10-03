@@ -240,9 +240,16 @@ std::vector<std::uint32_t> default_stage_layers(const artifact::Reader& reader,
 }
 
 std::unique_ptr<Model> materialize_model(LoadPlan&& plan, DeviceContext& device,
-                                         const StartupObserver* observer) {
+                                         const StartupObserver* observer,
+                                         std::shared_ptr<const artifact::Reader> source_owner) {
     if (!plan.impl_) { throw artifact::ArtifactError("load plan was already consumed"); }
     auto data = std::move(plan.impl_);
+    if (data->options.enable_model_suspend &&
+        (data->options.ranks != 1 || data->options.purpose != EnginePurpose::Generation ||
+         !source_owner || source_owner.get() != data->materialization.source ||
+         !EvictableWeightPool::supported(device))) {
+        throw std::invalid_argument("model suspend requires single-GPU Generation, VMM and an owned restore Reader");
+    }
     std::unique_ptr<EvictableWeightPool> pool;
     if (data->options.overlay_vision()) {
         // The tail is sized against the encode window once execution planning knows it; the
@@ -265,7 +272,10 @@ std::unique_ptr<Model> materialize_model(LoadPlan&& plan, DeviceContext& device,
     }
     auto backing = artifact::materialize(*data->materialization.source,
                                          std::move(data->materialization), device, observer,
-                                         std::move(pool));
+                                         std::move(pool), data->options.enable_model_suspend);
+    if (data->options.enable_model_suspend) {
+        backing.retain_restore_source(std::move(source_owner), std::move(data->materialization));
+    }
     auto bound   = loading::resolve_weights(std::move(data->pending), backing);
     std::optional<VisionOverlayLayout> vision_overlay;
     if (data->options.overlay_vision()) {
@@ -280,8 +290,9 @@ std::unique_ptr<Model> materialize_model(LoadPlan&& plan, DeviceContext& device,
 
 std::unique_ptr<Model> load_model(const std::filesystem::path& path, LoadOptions options,
                                   DeviceContext& device, const StartupObserver* observer) {
-    artifact::Reader reader(path);
-    return materialize_model(plan_load(reader, options), device, observer);
+    auto reader = std::make_shared<artifact::Reader>(path);
+    return materialize_model(plan_load(*reader, options), device, observer,
+                             options.enable_model_suspend ? reader : nullptr);
 }
 
 } // namespace ninfer::models::qwen3_5

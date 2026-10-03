@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <mutex>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -31,6 +32,9 @@ void ensure_driver_initialized() {
 }
 
 std::size_t align_up(std::size_t value, std::size_t alignment) {
+    if (!alignment || value > std::numeric_limits<std::size_t>::max() - (alignment - 1)) {
+        throw std::overflow_error("VMM pool size overflow");
+    }
     return (value + alignment - 1) / alignment * alignment;
 }
 
@@ -39,6 +43,10 @@ double seconds_since(Clock::time_point start) {
 }
 
 constexpr std::size_t kResidentPiece = 1024ULL * 1024ULL * 1024ULL;
+// Tune physical KV lending pieces independently of CUDA's minimum allocation granularity.
+// Kept in this translation unit so a size comparison rebuilds only this implementation.
+constexpr std::size_t kLendingPieceBytes = 64ULL * 1024ULL * 1024ULL;
+static_assert(kLendingPieceBytes && (kLendingPieceBytes & (kLendingPieceBytes - 1)) == 0);
 
 } // namespace
 
@@ -46,7 +54,7 @@ struct EvictableKVPool::Impl {
     DeviceContext& device;
     Config config{};
     std::size_t granularity       = 0;
-    std::size_t arena_reserved    = 0; // granularity-aligned home reservation
+    std::size_t arena_reserved    = 0; // hardware-granularity-aligned physical capacity
     std::size_t window_reserved   = 0; // granularity-aligned overlay reservation
     std::size_t lendable_granules = 0; // granules covering the KV payload prefix
     CUdeviceptr home              = 0;
@@ -54,6 +62,10 @@ struct EvictableKVPool::Impl {
     // One handle per piece: the lendable prefix in granules, the remainder in large pieces.
     // Offsets are arena offsets; the vectors are parallel and piece i of the prefix is granule i.
     std::vector<CUmemGenericAllocationHandle> handles;
+    std::vector<bool> home_mapped;
+    std::vector<CUdeviceptr> overlay_mapped;
+    bool detached = false;
+    CUcontext context = nullptr;
     std::vector<std::size_t> offsets;
     std::vector<std::size_t> sizes;
     std::vector<std::size_t> lent; // granule indices currently mapped at the overlay range
@@ -62,7 +74,29 @@ struct EvictableKVPool::Impl {
     LeaseFault fault       = LeaseFault::None;
     std::size_t fault_rank = 0;
 
-    explicit Impl(DeviceContext& context) : device(context) {}
+    explicit Impl(DeviceContext& owner) : device(owner) {
+        NINFER_CU_CHECK(cuCtxGetCurrent(&context));
+    }
+
+    void require_context() const {
+        CUcontext current = nullptr;
+        NINFER_CU_CHECK(cuCtxGetCurrent(&current));
+        if (current != context) { throw std::logic_error("pool used in a different CUDA context"); }
+    }
+
+    ~Impl() {
+        if (!home) { return; }
+        if (cuCtxPushCurrent(context) != CUDA_SUCCESS) { return; }
+        for (std::size_t piece = 0; piece < handles.size(); ++piece) {
+            if (overlay_mapped[piece]) { (void)cuMemUnmap(overlay_mapped[piece], sizes[piece]); }
+            else if (home_mapped[piece]) { (void)cuMemUnmap(home + offsets[piece], sizes[piece]); }
+            if (handles[piece]) { (void)cuMemRelease(handles[piece]); }
+        }
+        (void)cuMemAddressFree(home, arena_reserved);
+        if (overlay) { (void)cuMemAddressFree(overlay, window_reserved); }
+        CUcontext popped = nullptr;
+        (void)cuCtxPopCurrent(&popped);
+    }
 
     void set_access(CUdeviceptr va, std::size_t bytes) {
         CUmemAccessDesc access{};
@@ -74,12 +108,15 @@ struct EvictableKVPool::Impl {
 
     void map_home(std::size_t piece) {
         NINFER_CU_CHECK(cuMemMap(home + offsets[piece], sizes[piece], 0, handles[piece], 0));
+        home_mapped[piece] = true;
+        overlay_mapped[piece] = 0;
         set_access(home + offsets[piece], sizes[piece]);
     }
 
     void map_overlay(std::size_t piece, std::size_t rank) {
         check_fault(rank, LeaseFault::Overlay);
         NINFER_CU_CHECK(cuMemMap(overlay + rank * granularity, sizes[piece], 0, handles[piece], 0));
+        overlay_mapped[piece] = overlay + rank * granularity;
         check_fault(rank, LeaseFault::Access);
         set_access(overlay + rank * granularity, sizes[piece]);
     }
@@ -134,7 +171,7 @@ bool EvictableKVPool::supported(const DeviceContext& device) {
     return value != 0;
 }
 
-std::size_t EvictableKVPool::device_granularity(const DeviceContext& device) {
+std::size_t EvictableKVPool::lending_granularity(const DeviceContext& device) {
     if (!supported(device)) { return 0; }
     CUmemAllocationProp prop{};
     prop.type            = CU_MEM_ALLOCATION_TYPE_PINNED;
@@ -145,7 +182,7 @@ std::size_t EvictableKVPool::device_granularity(const DeviceContext& device) {
         CUDA_SUCCESS) {
         return 0;
     }
-    return granularity;
+    return granularity ? align_up(kLendingPieceBytes, granularity) : 0;
 }
 
 EvictableKVPool::EvictableKVPool(DeviceContext& device, const Config& config)
@@ -167,16 +204,19 @@ EvictableKVPool::EvictableKVPool(DeviceContext& device, const Config& config)
     prop.type          = CU_MEM_ALLOCATION_TYPE_PINNED;
     prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
     prop.location.id   = device.device;
-    NINFER_CU_CHECK(cuMemGetAllocationGranularity(&impl.granularity, &prop,
+    std::size_t allocation_granularity = 0;
+    NINFER_CU_CHECK(cuMemGetAllocationGranularity(&allocation_granularity, &prop,
                                                   CU_MEM_ALLOC_GRANULARITY_MINIMUM));
-    if (impl.granularity == 0) {
+    if (allocation_granularity == 0) {
         throw std::runtime_error("evictable KV pool read a zero VMM granularity");
     }
-    if (kResidentPiece % impl.granularity != 0) {
+    if (kResidentPiece % allocation_granularity != 0) {
         throw std::runtime_error("evictable KV resident piece is not a granularity multiple");
     }
 
-    impl.arena_reserved = align_up(config.arena_bytes, impl.granularity);
+    impl.granularity = align_up(kLendingPieceBytes, allocation_granularity);
+    // Only the lendable prefix uses larger pieces. Keep total physical capacity unchanged.
+    impl.arena_reserved = align_up(config.arena_bytes, allocation_granularity);
     // Whole granules only: a granule that straddles the payload boundary stays resident.
     impl.lendable_granules = config.lendable_prefix_bytes / impl.granularity;
     impl.window_reserved   = align_up(config.window_capacity_bytes, impl.granularity);
@@ -201,6 +241,8 @@ EvictableKVPool::EvictableKVPool(DeviceContext& device, const Config& config)
         offset += piece;
     }
 
+    impl.home_mapped.resize(impl.offsets.size());
+    impl.overlay_mapped.resize(impl.offsets.size());
     impl.handles.resize(impl.offsets.size());
     for (std::size_t piece = 0; piece < impl.offsets.size(); ++piece) {
         NINFER_CU_CHECK(cuMemCreate(&impl.handles[piece], impl.sizes[piece], &prop, 0));
@@ -208,23 +250,68 @@ EvictableKVPool::EvictableKVPool(DeviceContext& device, const Config& config)
     }
 }
 
-EvictableKVPool::~EvictableKVPool() {
-    if (impl_ == nullptr || impl_->home == 0) { return; }
-    Impl& impl = *impl_;
-    for (std::size_t rank = 0; rank < impl.lent.size(); ++rank) {
-        (void)cuMemUnmap(impl.overlay + rank * impl.granularity, impl.granularity);
-    }
-    for (std::size_t piece = 0; piece < impl.handles.size(); ++piece) {
-        const bool away = std::find(impl.lent.begin(), impl.lent.end(), piece) != impl.lent.end();
-        if (!away) { (void)cuMemUnmap(impl.home + impl.offsets[piece], impl.sizes[piece]); }
-        (void)cuMemRelease(impl.handles[piece]);
-    }
-    (void)cuMemAddressFree(impl.home, impl.arena_reserved);
-    (void)cuMemAddressFree(impl.overlay, impl.window_reserved);
-}
+EvictableKVPool::~EvictableKVPool() = default;
 
 DeviceSpan EvictableKVPool::arena() const noexcept {
     return DeviceSpan{reinterpret_cast<void*>(impl_->home), impl_->config.arena_bytes};
+}
+
+std::size_t EvictableKVPool::physical_bytes() const noexcept {
+    std::size_t total = 0;
+    for (std::size_t i = 0; i < impl_->handles.size(); ++i) {
+        if (impl_->handles[i]) { total += impl_->sizes[i]; }
+    }
+    return total;
+}
+
+void EvictableKVPool::detach_backing() {
+    Impl& impl = *impl_;
+    impl.require_context();
+    if (poisoned() || lease_open()) { throw std::logic_error("pool backing is busy or poisoned"); }
+    if (impl.detached) { return; }
+    impl.detached = true;
+    try {
+        for (std::size_t i = 0; i < impl.handles.size(); ++i) {
+            NINFER_CU_CHECK(cuMemUnmap(impl.home + impl.offsets[i], impl.sizes[i]));
+            impl.home_mapped[i] = false;
+            NINFER_CU_CHECK(cuMemRelease(impl.handles[i]));
+            impl.handles[i] = 0;
+        }
+    } catch (...) { impl.poisoned = true; throw; }
+}
+
+void EvictableKVPool::attach_backing() {
+    Impl& impl = *impl_;
+    impl.require_context();
+    if (poisoned() || lease_open()) { throw std::logic_error("pool backing is busy or poisoned"); }
+    if (!impl.detached) { return; }
+    CUmemAllocationProp prop{};
+    prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
+    prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+    prop.location.id = impl.device.device;
+    try {
+        for (std::size_t i = 0; i < impl.handles.size(); ++i) {
+            NINFER_CU_CHECK(cuMemCreate(&impl.handles[i], impl.sizes[i], &prop, 0));
+            impl.map_home(i);
+        }
+        impl.detached = false;
+    } catch (...) {
+        impl.poisoned = true;
+        // Roll back every piece created by this attach. Keep only resources whose cleanup
+        // failed, so destruction can retry without losing ownership or double-unmapping.
+        for (std::size_t i = 0; i < impl.handles.size(); ++i) {
+            if (impl.home_mapped[i]) {
+                if (cuMemUnmap(impl.home + impl.offsets[i], impl.sizes[i]) != CUDA_SUCCESS) {
+                    continue;
+                }
+                impl.home_mapped[i] = false;
+            }
+            if (impl.handles[i] && cuMemRelease(impl.handles[i]) == CUDA_SUCCESS) {
+                impl.handles[i] = 0;
+            }
+        }
+        throw;
+    }
 }
 
 std::size_t EvictableKVPool::granularity() const noexcept { return impl_->granularity; }
@@ -257,6 +344,7 @@ DeviceSpan EvictableKVPool::granule_bytes(std::size_t index) const {
 EvictableKVPool::Transaction EvictableKVPool::lease(std::span<const std::size_t> granules,
                                                     cudaStream_t stream) {
     Impl& impl = *impl_;
+    if (impl.detached) { throw std::logic_error("KV pool backing is detached"); }
     if (impl.poisoned) {
         throw std::runtime_error("evictable KV pool is poisoned by a failed return");
     }
@@ -290,6 +378,7 @@ EvictableKVPool::Transaction EvictableKVPool::lease(std::span<const std::size_t>
             const std::size_t piece = granules[rank];
             impl.check_fault(rank, LeaseFault::Unmap);
             NINFER_CU_CHECK(cuMemUnmap(impl.home + impl.offsets[piece], impl.sizes[piece]));
+            impl.home_mapped[piece] = false;
             homeless = true;
             impl.map_overlay(piece, rank);
             impl.lent.push_back(piece);

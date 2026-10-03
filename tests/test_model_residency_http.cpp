@@ -1,0 +1,194 @@
+#include "models/qwen3_5/execution_fixture.h"
+#include "serve/http_server.h"
+#include "serve/model_residency.h"
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include <spdlog/sinks/null_sink.h>
+#include <spdlog/logger.h>
+#include <iostream>
+#include <thread>
+
+namespace {
+using namespace ninfer;
+using namespace ninfer::serve;
+using Json = nlohmann::json;
+void require(bool condition, const std::string& message) {
+    if (!condition) { throw std::runtime_error(message); }
+}
+
+struct Listener {
+    HttpServer& server;
+    std::thread worker;
+    explicit Listener(HttpServer& owner) : server(owner), worker([&owner] { (void)owner.listen(); }) {}
+    ~Listener() { server.stop(); worker.join(); }
+};
+void run(bool enabled, const std::string& alias,
+         SuspendSnapshotMemory memory = SuspendSnapshotMemory::Pinned) {
+    ninfer::test::qwen_fixture::ModelFixture fixture;
+    ninfer::test::qwen_fixture::execution_fixture(fixture);
+    ServeOptions options;
+    options.artifact_path = fixture.file.entry;
+    options.enable_model_suspend = enabled;
+    options.suspend_snapshot_memory = memory;
+    options.max_context = 128;
+    options.kv_capacity = KvCapacityPolicy::explicit_capacity(128);
+    options.prefill_chunk = 128;
+    options.context_cache.host_kv_capacity_bytes = 0;
+    options.context_cache.host_state_slots = 0;
+    options.api_key = "test-key";
+    options.model_id_override = alias;
+    options.log_stats_interval_ms = 0;
+    options.enable_webui = false;
+    GenerationService service(options);
+    auto logger = std::make_shared<spdlog::logger>("residency-test", std::make_shared<spdlog::sinks::null_sink_mt>());
+    options.port = 28179;
+    HttpServer server(options, logger);
+    require(server.bind(), "cannot bind residency test listener");
+    server.attach(service);
+    Listener listener(server);
+    httplib::Client client(options.host, options.port);
+    client.set_connection_timeout(5);
+    client.set_read_timeout(30);
+    const httplib::Headers auth = {{"Authorization", "Bearer test-key"}};
+    const std::string base = "/v1/models/" + alias;
+    const auto get = [&](const std::string& path, int status) {
+        auto response = client.Get(path, auth);
+        require(response && response->status == status, "unexpected GET status for " + path +
+                (response ? ": " + std::to_string(response->status) + " " + response->body : ": no response"));
+        return Json::parse(response->body);
+    };
+    const auto post = [&](const std::string& path, const std::string& body, int status) {
+        auto response = client.Post(path, auth, body, "application/json");
+        require(response && response->status == status, "unexpected POST status for " + path +
+                (response ? ": " + response->body : ": no response"));
+        return Json::parse(response->body);
+    };
+    auto unauthenticated = client.Post(base + "/suspend", "{}", "application/json");
+    require(unauthenticated && unauthenticated->status == 401, "management bypassed auth");
+    const auto detail = get(base, 200);
+    require(detail["object"] == "model" && detail["id"] == alias, "management shadowed model detail");
+    const auto ready = get(base + "/residency", 200);
+    require(ready["object"] == "model.residency" && ready["model"] == alias &&
+            ready["state"] == "ready" && ready["enabled"] == enabled, "wrong alias residency status");
+    const bool pinned = enabled && memory == SuspendSnapshotMemory::Pinned;
+    require(ready["persistent_snapshot_bytes"] == 0 && ready["persistent_snapshot_pinned"] == pinned &&
+            (ready["persistent_snapshot_capacity_bytes"].get<std::size_t>() > 0) == pinned,
+            "HTTP READY status confused allocated pinned capacity with valid snapshot");
+    require(get("/v1/models", 200)["data"][0]["id"] == alias, "model list lost public alias");
+    get("/v1/models/unknown/residency", 404);
+    post("/v1/models/unknown/suspend", "{}", 404);
+    auto generation_body = Json::parse(
+        R"({"messages":[{"role":"user","content":"hello"}],"max_tokens":3,"temperature":0,"ignore_eos":true})");
+    generation_body["model"] = alias;
+    if (!enabled) {
+        for (const auto* operation : {"/suspend", "/resume"}) {
+            require(post(base + operation, "{}", 400)["error"]["code"] == "model_suspend_disabled",
+                    "disabled management did not preserve opt-in contract");
+        }
+        require(post("/v1/chat/completions", generation_body.dump(), 200)["usage"]["completion_tokens"] == 3,
+                "disabled suspend broke alias generation");
+        return;
+    }
+    for (const auto* body : {"", "{", "[]", "null", "{\"memory_class\":\"weights\"}",
+                            "{\"auto_resume\":null}", "{\"auto_resume\":1}",
+                            "{\"auto_resume\":\"false\"}", "{\"auto_resume\":true,\"other\":0}"}) {
+        post(base + "/suspend", body, 400);
+    }
+    post(base + "/resume", R"({"auto_resume":true})", 400);
+    // A completed zero-output generation still has a service response reservation until released.
+    GenerationRequest request;
+    request.messages.push_back(ChatTurn{.role = ChatRole::User,
+                                       .content = {ContentPart{.kind = ContentKind::Text, .text = "hello"}}});
+    auto prepared = service.prepare(request, GenerationConsumerMode::Aggregate);
+    (void)service.run(prepared, nullptr);
+    require(post(base + "/suspend", "{}", 409)["error"]["code"] == "model_busy",
+            "suspend ignored service response reservation");
+    prepared = {};
+    const auto suspended = post(base + "/suspend", R"({"auto_resume":false})", 200);
+    require(suspended["state"] == "suspended" && suspended["retained_device_bytes"] == 0 &&
+            suspended["persistent_snapshot_bytes"].get<std::size_t>() > 0, "incomplete HTTP suspend");
+    require(suspended["auto_resume"] == false, "manual suspend policy lost");
+    require(post(base + "/suspend", R"({"auto_resume":false})", 200)["state"] == "suspended", "HTTP suspend not idempotent");
+    get(base + "/residency", 200);
+    get("/v1/models", 200);
+    get("/stats", 200);
+    get("/health", 503);
+    for (const auto* path : {"/v1/chat/completions", "/v1/responses", "/v1/responses/input_tokens",
+                            "/v1/messages", "/v1/messages/count_tokens"}) {
+        const auto error = post(path, "{}", 503);
+        // Anthropic uses its protocol-specific error shape; all gates run before body/SSE handling.
+        require(error.contains("error"), "missing unavailable error");
+        if (std::string_view(path).find("messages") == std::string_view::npos) {
+            require(error["error"]["code"] == "model_suspended", "wrong unavailable code");
+        }
+    }
+    require(service.residency().state == ModelResidencyState::Suspended, "inference implicitly resumed model");
+    const auto resumed = post(base + "/resume", "{}", 200);
+    require(resumed["state"] == "ready" && resumed["persistent_snapshot_bytes"] == 0 &&
+            resumed["persistent_snapshot_capacity_bytes"] == ready["persistent_snapshot_capacity_bytes"] &&
+            resumed["persistent_snapshot_pinned"] == pinned &&
+            resumed["weight_h2d_bytes"].get<std::uint64_t>() > 0, "incomplete HTTP resume");
+    post(base + "/resume", "{}", 200);
+    get("/health", 200);
+    const auto generation = post("/v1/chat/completions", generation_body.dump(), 200);
+    require(generation["usage"]["completion_tokens"] == 3, "HTTP generation did not recover after resume");
+    for (const auto* path : {"/v1/chat/completions", "/v1/responses", "/v1/messages"}) {
+        post(base + "/suspend", R"({"auto_resume":false})", 200);
+        require(post(base + "/suspend", "{}", 200)["auto_resume"] == true,
+                "default suspend did not reset auto_resume while suspended");
+        const auto before = get(base + "/residency", 200);
+        post(path, "{}", 400);
+        auto wrong_model = generation_body;
+        wrong_model["model"] = "unknown";
+        post("/v1/chat/completions", wrong_model.dump(), 404);
+        auto unauthorized = client.Post(path, "{}", "application/json");
+        require(unauthorized && unauthorized->status == 401, "auto resume bypassed authentication");
+        for (const auto* count_path : {"/v1/responses/input_tokens", "/v1/messages/count_tokens"}) {
+            post(count_path, "{}", 503);
+        }
+        require(get(base + "/residency", 200)["state"] == "suspended" &&
+                before["retained_device_bytes"] == 0, "non-generation request resumed model");
+        Json body = generation_body;
+        if (std::string_view(path) == "/v1/responses") {
+            body = {{"model", alias}, {"input", "hello"}, {"max_output_tokens", 3}, {"store", false}};
+        } else if (std::string_view(path) == "/v1/messages") {
+            body.erase("ignore_eos");
+        }
+        post(path, body.dump(), 200);
+        require(get(base + "/residency", 200)["state"] == "ready", "generation did not auto resume");
+    }
+    post(base + "/suspend", R"({"auto_resume":true})", 200);
+    auto streaming = generation_body;
+    streaming["stream"] = true;
+    auto stream = client.Post("/v1/chat/completions", auth, streaming.dump(), "application/json");
+    require(stream && stream->status == 200 && stream->body.find("data: [DONE]") != std::string::npos,
+            "streaming generation did not resume before SSE");
+    post(base + "/suspend", "{}", 200);
+    const auto timestamp = std::filesystem::last_write_time(fixture.file.entry);
+    std::filesystem::last_write_time(fixture.file.entry, timestamp + std::chrono::seconds(10));
+    require(post("/v1/chat/completions", generation_body.dump(), 500)["error"]["code"] == "model_residency_error",
+            "automatic resume failure misclassified");
+    const auto failed = get(base + "/residency", 200);
+    require(failed["state"] == "error" && !failed["last_error"].get<std::string>().empty() &&
+            failed["persistent_snapshot_bytes"].get<std::size_t>() > 0, "ERROR diagnostics unavailable");
+    post(base + "/suspend", "{}", 500);
+    post(base + "/resume", "{}", 500);
+    post("/v1/responses", "{}", 503);
+}
+}
+int main() {
+    int count = 0, vmm = 0;
+    if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0 || cuInit(0) != CUDA_SUCCESS ||
+        cuDeviceGetAttribute(&vmm, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, 0) != CUDA_SUCCESS || !vmm) {
+        return 77;
+    }
+    try {
+        for (const auto* alias : {"deployment/alias", "deployment/residency", "deployment/residency/residency"}) {
+            for (const bool enabled : {true, false}) { run(enabled, alias); }
+        }
+        run(true, "deployment/pageable", SuspendSnapshotMemory::Pageable);
+        std::cout << "PASS residency HTTP aliases, enabled/disabled and pageable storage\n";
+        return 0;
+    }
+    catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+}

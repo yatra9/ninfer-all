@@ -102,7 +102,9 @@ public:
                         std::function<bool()> can_lend, std::function<void()> on_change);
 
     // Free KV granules only; empty when they cannot fund the window.
-    [[nodiscard]] std::optional<VisionWindow> try_acquire_kv(std::size_t bytes);
+    // pending_pages is the early submission's MainKV demand before activation reserves it.
+    [[nodiscard]] std::optional<VisionWindow> try_acquire_kv(std::size_t bytes,
+                                                           std::uint32_t pending_pages = 0);
     // Free KV granules when they cover the window, the evict-ranked weight tail otherwise.
     [[nodiscard]] VisionWindow acquire(std::size_t bytes);
 
@@ -240,9 +242,10 @@ public:
     VisionOverlaySession& operator=(const VisionOverlaySession&) = delete;
 
     // Opens a KV-funded window and enqueues the item's encode on the Vision stream. Returns false,
-    // leaving nothing open, when free KV cannot fund the window.
+    // leaving nothing open, when free KV cannot fund the window and pending activation demand.
     [[nodiscard]] bool submit_item(std::span<const std::uint16_t> patches,
-                                   const qwen3_5::VisionItemControl& control);
+                                   const qwen3_5::VisionItemControl& control,
+                                   std::uint32_t pending_pages = 0);
 
     [[nodiscard]] bool pending() const noexcept { return pending_; }
 

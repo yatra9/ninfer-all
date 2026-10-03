@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <mutex>
 
 namespace ninfer::artifact {
 
@@ -17,7 +18,14 @@ struct Reader::Impl {
     std::uint64_t entry_payload_start = 0;
     std::uint64_t file_bytes          = 0;
     mutable std::vector<std::unique_ptr<InputFile>> files;
+    mutable std::mutex files_mutex;
     mutable std::vector<std::optional<WeightGeometry>> geometries;
+    struct SourceIdentity {
+        std::filesystem::path path;
+        std::uintmax_t bytes;
+        std::filesystem::file_time_type modified;
+    };
+    mutable std::vector<SourceIdentity> source_identity;
 
     explicit Impl(const std::filesystem::path& path) : entry(path) {
         auto file = std::make_unique<InputFile>(entry);
@@ -61,6 +69,9 @@ struct Reader::Impl {
     }
 
     InputFile& file(std::size_t index) const {
+        // Concurrent direct readers may first encounter the same continuation. Publish one
+        // fully validated file; the positional read itself runs outside this lock.
+        std::lock_guard lock(files_mutex);
         if (index >= files.size()) { throw ArtifactError("invalid continuation index"); }
         if (!files[index]) {
             const auto& record = directory.files[index];
@@ -116,6 +127,26 @@ void Reader::validate_object(ObjectHandle handle) const {
         (void)geometry(handle);
     } else if (std::get<ResourceObject>(object).encoding != kRawBytesEncoding) {
         throw ArtifactError(object_id(object) + ": unsupported resource encoding");
+    }
+}
+
+void Reader::capture_source_identity() const {
+    impl_->source_identity.clear();
+    for (std::size_t i = 0; i < impl_->files.size(); ++i) {
+        if (!impl_->files[i]) { continue; }
+        const auto path = i == 0 ? impl_->entry : impl_->entry.parent_path() / *impl_->directory.files[i].path;
+        const auto bytes = std::filesystem::file_size(path);
+        if (bytes != impl_->files[i]->bytes()) { throw ArtifactError("restore source size changed during load"); }
+        impl_->source_identity.push_back({path, bytes, std::filesystem::last_write_time(path)});
+    }
+}
+void Reader::verify_source_unchanged() const {
+    if (impl_->source_identity.empty()) { throw ArtifactError("restore source identity was not captured"); }
+    for (const auto& file : impl_->source_identity) {
+        if (std::filesystem::file_size(file.path) != file.bytes ||
+            std::filesystem::last_write_time(file.path) != file.modified) {
+            throw ArtifactError(file.path.string() + ": artifact changed since model load");
+        }
     }
 }
 

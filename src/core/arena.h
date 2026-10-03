@@ -6,9 +6,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <memory>
 #include <vector>
 
 namespace ninfer {
+
+class RemappableDeviceAllocation;
 
 struct DeviceSpan {
     void* data        = nullptr;
@@ -74,7 +77,7 @@ public:
         std::size_t saved_rank_ = 0;
     };
 
-    explicit DeviceArena(std::size_t capacity_bytes);
+    explicit DeviceArena(std::size_t capacity_bytes, bool suspendable = false);
     // Non-owning arena over an already allocated device region.
     explicit DeviceArena(DeviceSpan storage);
     ~DeviceArena();
@@ -92,6 +95,9 @@ public:
     void* base() const noexcept;
     std::size_t used() const noexcept;
     std::size_t capacity() const noexcept;
+    [[nodiscard]] std::size_t physical_bytes() const noexcept;
+    void detach_backing();
+    void attach_backing();
     std::size_t peak_used() const noexcept;
     void reset_peak() noexcept;
 
@@ -133,6 +139,7 @@ private:
     // arena while a borrowed rank is active frees storage this arena does not own and leaks the
     // rank-0 allocation it does.
     void* owned_base_ = nullptr;
+    std::unique_ptr<RemappableDeviceAllocation> remappable_;
 
     // Empty until a second rank is attached, so the single-device path carries no extra state and
     // no extra work.

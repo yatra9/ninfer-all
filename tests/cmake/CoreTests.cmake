@@ -31,6 +31,31 @@ ninfer_add_test(ninfer_vmm_graph_remap_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_vmm_graph_remap.cu"
   LIBRARIES ninfer_core CUDA::cuda_driver)
 
+ninfer_add_test(ninfer_vmm_suspend_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_vmm_suspend.cu"
+  LIBRARIES CUDA::cudart CUDA::cuda_driver)
+set_tests_properties(ninfer_vmm_suspend_test PROPERTIES SKIP_RETURN_CODE 77)
+
+ninfer_add_test(ninfer_suspend_backing_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_suspend_backing.cu"
+  LIBRARIES ninfer_core)
+set_tests_properties(ninfer_suspend_backing_test PROPERTIES SKIP_RETURN_CODE 77)
+
+if(UNIX AND NOT APPLE)
+  ninfer_add_test(ninfer_suspend_upload_timing_test STANDALONE
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/../artifact/test_suspend_upload_timing.cpp"
+    LIBRARIES ninfer_artifact ninfer_core CUDA::cuda_driver ninfer::json)
+  target_link_options(ninfer_suspend_upload_timing_test PRIVATE -Wl,--wrap=cudaMemcpy)
+  set_tests_properties(ninfer_suspend_upload_timing_test PROPERTIES SKIP_RETURN_CODE 77)
+  ninfer_add_test(ninfer_suspend_pool_failure_test STANDALONE
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_suspend_pool_failure.cpp"
+    LIBRARIES ninfer_core CUDA::cuda_driver)
+  target_link_options(ninfer_suspend_pool_failure_test PRIVATE
+    -Wl,--wrap=cuMemCreate -Wl,--wrap=cuMemMap -Wl,--wrap=cuMemSetAccess
+    -Wl,--wrap=cuMemUnmap -Wl,--wrap=cuMemRelease)
+  set_tests_properties(ninfer_suspend_pool_failure_test PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 ninfer_add_test(ninfer_evictable_kv_pool_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_evictable_kv_pool.cu"
   LIBRARIES ninfer_core CUDA::cuda_driver)

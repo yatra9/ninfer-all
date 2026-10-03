@@ -112,7 +112,8 @@ public:
     // Overlay residency: starts the encode of the next item ahead of its prefill unit so its window
     // overlaps other lanes' decode. A no-op when a window is open, the item is already active, free
     // KV cannot fund the window or the residency is resident; the synchronous path then stands.
-    void submit_next_item();
+    // Pending MainKV demand is supplied only before the activation reservation exists.
+    void submit_next_item(std::uint32_t pending_pages = 0);
     // True while a submitted item is still encoding: the lane must not be given a prefill unit.
     [[nodiscard]] bool vision_pending() const;
     [[nodiscard]] VisionOverlayWindowStats overlay_stats() const noexcept;

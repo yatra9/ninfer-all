@@ -111,6 +111,9 @@ public:
     [[nodiscard]] RuntimeStats runtime_stats() const;
     [[nodiscard]] MediaCacheSummary media_cache_summary() const;
     [[nodiscard]] bool is_available() const;
+    [[nodiscard]] ModelResidencyStatus residency() const;
+    [[nodiscard]] ModelResidencyStatus suspend();
+    [[nodiscard]] ModelResidencyStatus resume();
 
     void reset_memory_peaks() noexcept;
 

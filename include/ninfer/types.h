@@ -19,6 +19,44 @@ namespace ninfer {
 
 using TokenId = std::int32_t;
 
+enum class ModelResidencyState : std::uint8_t { Ready, Suspending, Suspended, Resuming, Error };
+enum class SuspendSnapshotMemory : std::uint8_t { Pinned, Pageable };
+enum class ModelResidencyErrorKind : std::uint8_t { Busy, Unsupported, Failure };
+class ModelResidencyError final : public std::runtime_error {
+public:
+    ModelResidencyError(ModelResidencyErrorKind kind, std::string message)
+        : std::runtime_error(std::move(message)), kind_(kind) {}
+    [[nodiscard]] ModelResidencyErrorKind kind() const noexcept { return kind_; }
+private:
+    ModelResidencyErrorKind kind_;
+};
+struct ModelResidencyStatus {
+    bool enabled = false;
+    ModelResidencyState state = ModelResidencyState::Ready;
+    std::size_t weight_device_bytes = 0;
+    std::size_t persistent_device_bytes = 0;
+    std::size_t workspace_device_bytes = 0;
+    // Known NInfer backing only. CUDA context/graph/driver allocations are not estimated here.
+    std::size_t retained_device_bytes = 0;
+    // Valid restore data only; zero in READY even when pinned storage is retained.
+    std::size_t persistent_snapshot_bytes = 0;
+    // Allocated Host storage, including the reusable pinned buffer while READY.
+    std::size_t persistent_snapshot_capacity_bytes = 0;
+    bool persistent_snapshot_pinned = false;
+    std::size_t released_device_bytes = 0;
+    std::size_t mapped_device_bytes = 0;
+    std::uint64_t weight_artifact_read_bytes = 0;
+    std::uint64_t weight_h2d_bytes = 0;
+    double last_suspend_seconds = 0;
+    double last_resume_seconds = 0;
+    double persistent_snapshot_d2h_seconds = 0;
+    double persistent_snapshot_h2d_seconds = 0;
+    double weight_restore_seconds = 0;
+    double vmm_unmap_release_seconds = 0;
+    double vmm_map_seconds = 0;
+    std::string last_error;
+};
+
 inline constexpr std::uint32_t kMaximumConcurrency               = 8;
 inline constexpr std::size_t kMaximumContextCacheSessionKeyBytes = 256;
 inline constexpr std::size_t kMaximumExplicitPromptCacheMarkers  = 4;
@@ -409,6 +447,9 @@ struct EngineOptions {
     // Zero selects a bounded worker count from the detected host concurrency.
     std::uint32_t media_preprocess_threads = 0;
     bool enable_vision                     = false;
+    // Single-GPU Generation only; keeps fixed virtual addresses across explicit idle suspend.
+    bool enable_model_suspend              = false;
+    SuspendSnapshotMemory suspend_snapshot_memory = SuspendSnapshotMemory::Pinned;
     VisionResidency vision_residency       = VisionResidency::Resident;
     // Speed-for-quality trades, opt-in and off by default. Measured in
     // docs/maintainer/quality-trade-experiments.md: lm_head_q4 costs +0.69% perplexity for a
