@@ -43,6 +43,10 @@ double seconds_since(Clock::time_point start) {
 }
 
 constexpr std::size_t kResidentPiece = 1024ULL * 1024ULL * 1024ULL;
+// Tune physical KV lending pieces independently of CUDA's minimum allocation granularity.
+// Kept in this translation unit so a size comparison rebuilds only this implementation.
+constexpr std::size_t kLendingPieceBytes = 64ULL * 1024ULL * 1024ULL;
+static_assert(kLendingPieceBytes && (kLendingPieceBytes & (kLendingPieceBytes - 1)) == 0);
 
 } // namespace
 
@@ -50,7 +54,7 @@ struct EvictableKVPool::Impl {
     DeviceContext& device;
     Config config{};
     std::size_t granularity       = 0;
-    std::size_t arena_reserved    = 0; // granularity-aligned home reservation
+    std::size_t arena_reserved    = 0; // hardware-granularity-aligned physical capacity
     std::size_t window_reserved   = 0; // granularity-aligned overlay reservation
     std::size_t lendable_granules = 0; // granules covering the KV payload prefix
     CUdeviceptr home              = 0;
@@ -167,7 +171,7 @@ bool EvictableKVPool::supported(const DeviceContext& device) {
     return value != 0;
 }
 
-std::size_t EvictableKVPool::device_granularity(const DeviceContext& device) {
+std::size_t EvictableKVPool::lending_granularity(const DeviceContext& device) {
     if (!supported(device)) { return 0; }
     CUmemAllocationProp prop{};
     prop.type            = CU_MEM_ALLOCATION_TYPE_PINNED;
@@ -178,7 +182,7 @@ std::size_t EvictableKVPool::device_granularity(const DeviceContext& device) {
         CUDA_SUCCESS) {
         return 0;
     }
-    return granularity;
+    return granularity ? align_up(kLendingPieceBytes, granularity) : 0;
 }
 
 EvictableKVPool::EvictableKVPool(DeviceContext& device, const Config& config)
@@ -200,16 +204,19 @@ EvictableKVPool::EvictableKVPool(DeviceContext& device, const Config& config)
     prop.type          = CU_MEM_ALLOCATION_TYPE_PINNED;
     prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
     prop.location.id   = device.device;
-    NINFER_CU_CHECK(cuMemGetAllocationGranularity(&impl.granularity, &prop,
+    std::size_t allocation_granularity = 0;
+    NINFER_CU_CHECK(cuMemGetAllocationGranularity(&allocation_granularity, &prop,
                                                   CU_MEM_ALLOC_GRANULARITY_MINIMUM));
-    if (impl.granularity == 0) {
+    if (allocation_granularity == 0) {
         throw std::runtime_error("evictable KV pool read a zero VMM granularity");
     }
-    if (kResidentPiece % impl.granularity != 0) {
+    if (kResidentPiece % allocation_granularity != 0) {
         throw std::runtime_error("evictable KV resident piece is not a granularity multiple");
     }
 
-    impl.arena_reserved = align_up(config.arena_bytes, impl.granularity);
+    impl.granularity = align_up(kLendingPieceBytes, allocation_granularity);
+    // Only the lendable prefix uses larger pieces. Keep total physical capacity unchanged.
+    impl.arena_reserved = align_up(config.arena_bytes, allocation_granularity);
     // Whole granules only: a granule that straddles the payload boundary stays resident.
     impl.lendable_granules = config.lendable_prefix_bytes / impl.granularity;
     impl.window_reserved   = align_up(config.window_capacity_bytes, impl.granularity);

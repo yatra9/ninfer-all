@@ -92,7 +92,7 @@ int main() {
                 }
                 require(live_handles == 0 && live_maps == 0);
                 {
-                    const auto g = ninfer::EvictableKVPool::device_granularity(device);
+                    const auto g = ninfer::EvictableKVPool::lending_granularity(device);
                     ninfer::EvictableKVPool pool(device, {.arena_bytes = 4 * g, .lendable_prefix_bytes = 2 * g, .window_capacity_bytes = g});
                     check(pool, stage, cleanup);
                 }

@@ -31,6 +31,11 @@ cleanup, busy rejection, and subsequent overlay loans using the new handles.
 On Linux, standalone `ninfer_suspend_pool_failure_test` injects create/map/access failures at
 the second piece of both pools. Its 18 cases also cover rollback unmap/release failures,
 immediate release of successful pieces and destructor retry of only the retained resources.
+`ninfer_evictable_kv_pool_test` qualifies the tuned physical lending pieces independently of
+logical KV pages: partial payload boundaries, rounded windows, discontiguous leases, live-page
+isolation, lease-failure rollback, fragmented/promised-page refusal, and payload lending beyond
+256 pages per piece. It also refuses a full-pool early loan that would consume pending activation
+demand. Its fixtures follow the compiled piece size without a full model.
 `ninfer_model_suspend_test` runs a generated two-layer attention/GDN artifact with
 supported dense geometry and BF16/row-scaled FP8 weights through the public Engine:
 opt-in/disabled handling, active and queued request rejection, repeated fresh-backing generation,

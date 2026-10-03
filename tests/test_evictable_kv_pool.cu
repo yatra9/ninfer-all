@@ -69,27 +69,17 @@ int main() {
         }
 
         int failures = 0;
-        // Sized in granules once the pool reports the device granularity: build a throwaway pool
-        // with a one-granule window to learn it, then the real fixture.
-        std::size_t granule = 0;
-        {
-            ninfer::EvictableKVPool probe(device, ninfer::EvictableKVPool::Config{
-                                                      .arena_bytes           = 8ULL << 20,
-                                                      .lendable_prefix_bytes = 8ULL << 20,
-                                                      .window_capacity_bytes = 1,
-                                                  });
-            granule = probe.granularity();
-            failures += expect(granule != 0 && (granule & (granule - 1)) == 0,
-                               "granularity is a nonzero power of two");
-        }
+        const std::size_t granule = ninfer::EvictableKVPool::lending_granularity(device);
+        failures += expect(granule != 0 && (granule & (granule - 1)) == 0,
+                           "lending granularity is a nonzero power of two");
 
-        // Six granules of payload plus a deliberately unaligned resident remainder.
+        // Six whole lendable pieces; a partial payload piece remains resident with the suffix.
         const std::size_t payload_bytes = 6 * granule;
         const std::size_t arena_bytes   = payload_bytes + granule / 2 + 4096;
         ninfer::EvictableKVPool pool(device, ninfer::EvictableKVPool::Config{
                                                  .arena_bytes           = arena_bytes,
-                                                 .lendable_prefix_bytes = payload_bytes,
-                                                 .window_capacity_bytes = 3 * granule,
+                                                 .lendable_prefix_bytes = payload_bytes + granule / 2,
+                                                 .window_capacity_bytes = 3 * granule - 1,
                                              });
 
         const ninfer::DeviceSpan arena = pool.arena();
@@ -251,7 +241,7 @@ int main() {
             };
             ninfer::LayoutBuilder builder;
             const ninfer::DeviceKVPagePoolLayout layout = ninfer::plan_device_kv_page_pool(
-                builder, {.page_group_count = 512, .geometry = geometry});
+                builder, {.page_group_count = 128, .geometry = geometry});
             const std::size_t needed = builder.finish(256, "loan fixture");
             ninfer::EvictableKVPool fixture(device, ninfer::EvictableKVPool::Config{
                                                         .arena_bytes           = needed,
@@ -276,12 +266,23 @@ int main() {
 
             // A live page at the top must push the plan away from the granules it backs.
             std::vector<ninfer::DeviceKVPageLease> live;
-            live.reserve(512);
-            std::optional<ninfer::DeviceKVPageReservation> reservation = pages.reserve(512);
-            pages.materialize(*reservation, 512, live);
+            live.reserve(128);
+            std::optional<ninfer::DeviceKVPageReservation> reservation = pages.reserve(128);
+            pages.materialize(*reservation, 128, live);
             const ninfer::KVLoanPlan starved = ninfer::plan_kv_loan(fixture, pages, granule);
             failures += expect(starved.granules.empty(),
                                "a full pool cannot fund a loan");
+            live.clear();
+            reservation.reset();
+
+            // Plenty of free pages, but no whole physical piece: never lend a piece that
+            // shares even one live page. Returning these pages must make the loan usable again.
+            reservation = pages.reserve(128);
+            pages.materialize(*reservation, 128, live);
+            for (std::size_t i = 0; i < live.size(); i += 2) { live[i] = {}; }
+            failures += expect(pages.available_pages() > unit &&
+                                   ninfer::plan_kv_loan(fixture, pages, granule).granules.empty(),
+                               "fragmented free pages cannot lend a partly live piece");
             live.clear();
             reservation.reset();
 
@@ -298,6 +299,32 @@ int main() {
             const ninfer::KVLoanPlan huge =
                 ninfer::plan_kv_loan(fixture, pages, 64ULL * granule);
             failures += expect(huge.granules.empty(), "a request beyond the pool is refused");
+        }
+
+        // Real-sized payload page strides remain lendable when a piece needs more than
+        // 256 pages; the old fixed page cap silently disabled Vision's KV tier at large sizes.
+        {
+            constexpr std::size_t page_bytes = 8192;
+            const auto unit = static_cast<std::uint32_t>(granule / page_bytes);
+            ninfer::KVPageGeometry geometry{
+                .planes = {{ninfer::DType::I8, 64, 2, 256}},
+            };
+            ninfer::LayoutBuilder builder;
+            const auto layout = ninfer::plan_device_kv_page_pool(
+                builder, {.page_group_count = 3 * unit, .geometry = geometry});
+            const auto needed = builder.finish(256, "large-piece loan fixture");
+            ninfer::EvictableKVPool fixture(device, {.arena_bytes = needed,
+                .lendable_prefix_bytes = needed, .window_capacity_bytes = 3 * granule});
+            ninfer::DeviceKVPagePool pages(fixture.arena(), layout);
+            failures += expect(ninfer::kv_loan_unit_pages(pages, granule) == unit,
+                               "payload eligibility does not depend on piece page count");
+            const auto plan = ninfer::plan_kv_loan(fixture, pages, granule);
+            failures += expect(plan.bytes == granule && !plan.runs.empty(),
+                               "a large piece can fund a payload loan");
+            failures += expect(!ninfer::plan_kv_loan(fixture, pages, 3 * granule).granules.empty(),
+                               "an idle pool can lend its complete payload");
+            failures += expect(ninfer::plan_kv_loan(fixture, pages, 3 * granule, 1).granules.empty(),
+                               "an early loan cannot consume pending activation demand");
         }
 
         if (failures != 0) {

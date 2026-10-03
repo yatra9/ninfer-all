@@ -50,14 +50,16 @@ std::unique_ptr<EvictableKVPool> make_kv_arena(DeviceContext& device,
         throw std::logic_error("overlay Vision weight pool has no captured window");
     }
     const std::size_t window      = pool->window_capacity_bytes();
-    const std::size_t granularity = EvictableKVPool::device_granularity(device);
+    const std::size_t granularity = EvictableKVPool::lending_granularity(device);
     if (window == 0 || granularity == 0 || plan.persistent.lendable_kv_end_bytes == 0) {
         return nullptr;
     }
     // A KV cache smaller than one window can never fund a concurrent encode. The Engine still runs:
     // every window then borrows the weight tail.
     const std::size_t lendable = plan.persistent.lendable_kv_end_bytes / granularity * granularity;
-    if (window > lendable) { return nullptr; }
+    if (window / granularity + (window % granularity != 0) > lendable / granularity) {
+        return nullptr;
+    }
     return std::make_unique<EvictableKVPool>(
         device, EvictableKVPool::Config{
                     .arena_bytes           = plan.persistent.bytes,

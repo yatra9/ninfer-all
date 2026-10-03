@@ -367,9 +367,11 @@ what remains is the image prompt's own prefill chunks, which block decode in eit
 cache smaller than one window (the 20 480-token row) simply has no pages to lend, so every window
 there is exclusive and the engine behaves exactly as it did before this tier existed.
 
-The remapping itself is cheap on both paths: 192 MiB left the arena in 3.9–31 ms and came back in
-12–32 ms. The KV path pays more of it because it remaps 2 MiB granules where the weight path
-remaps 16 MiB chunks.
+In these measurements, 192 MiB left the arena in 3.9–31 ms and came back in 12–32 ms. They used
+2 MiB KV granules and 16 MiB weight chunks. KV physical lending pieces are now tuned through
+`kLendingPieceBytes` in `src/core/evictable_kv_pool.cu`; these historical timings do not establish
+the performance of another piece size. The current size comparison is recorded in
+[`../../PLAN_SUSPEND.md`](../../PLAN_SUSPEND.md).
 
 ## Reproduction and reports
 

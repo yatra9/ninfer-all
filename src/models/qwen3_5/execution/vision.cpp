@@ -679,7 +679,7 @@ Tensor VisionPrefillSession::bridge_column(const VisionChunk& chunk, std::int32_
     return staged;
 }
 
-void VisionPrefillSession::submit_next_item() {
+void VisionPrefillSession::submit_next_item(std::uint32_t pending_pages) {
     if (cpu_ != nullptr) {
         submit_cpu_item(active_item_ ? next_use_ + 1U : next_use_);
         return;
@@ -694,7 +694,8 @@ void VisionPrefillSession::submit_next_item() {
     if (!prompt_.local_videos.empty() && prompt_.local_videos[use.prepared_item_index]) { return; }
     const auto& payload      = prompt_.media_payloads[use.prepared_item_index];
     if (!payload) { return; }
-    if (overlay_->submit_item(payload->span(), plan_.control->items[use.control_index])) {
+    if (overlay_->submit_item(payload->span(), plan_.control->items[use.control_index],
+                              pending_pages)) {
         submitted_item_ = use.control_index;
     }
 }

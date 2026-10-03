@@ -70,10 +70,10 @@ public:
     };
 
     [[nodiscard]] static bool supported(const DeviceContext& device);
-    // VMM allocation granularity of the device, or zero when virtual memory management is
-    // unavailable. Lets a caller decide whether a window fits the lendable prefix before it
-    // commits to building a pool.
-    [[nodiscard]] static std::size_t device_granularity(const DeviceContext& device);
+    // Physical lending piece size, rounded to the device VMM allocation granularity; zero
+    // when VMM is unavailable. Callers use this to test a whole-piece window before creating
+    // the pool. The tuning constant lives in evictable_kv_pool.cu.
+    [[nodiscard]] static std::size_t lending_granularity(const DeviceContext& device);
 
     EvictableKVPool(DeviceContext& device, const Config& config);
     ~EvictableKVPool();

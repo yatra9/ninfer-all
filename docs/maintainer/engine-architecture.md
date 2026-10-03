@@ -245,6 +245,18 @@ artifact materialization arenas; overlay weights are owned by `EvictableWeightPo
 borrowed Model arena views. Program owns workspace storage and either an owning persistent
 arena or an `EvictableKVPool` with a borrowed persistent view. CPU page/slot/cache bookkeeping,
 limited overlay mirrors, pinned Vision weights/results and ingress/egress buffers remain alive.
+The KV pool's physical lending size is the private `kLendingPieceBytes` tuning constant in
+`core/evictable_kv_pool.cu`, rounded to the hardware VMM granularity. It is independent of logical
+64-token KV pages. Only whole pieces within free, unpromised payload pages can fund Vision;
+otherwise the existing weight-tail tier remains available. Plane eligibility uses an 8 KiB
+minimum page stride rather than a fixed page count per piece. The final resident remainder and
+total physical capacity still use hardware granularity, so tuning adds no Host buffer or Device
+capacity. Stable pointers, lease rollback/return ownership and full-arena snapshots are unchanged.
+Before an activation has physical reservations, early Vision submission passes the selected
+materialization plan's pending MainKV demand through the execution session to the loan planner.
+That capacity cannot be lent. If the window cannot fit, early submission is skipped and the normal
+encode chooses its tier after activation reserves the request's pages. Hybrid/subsequent submissions
+already have reservations, which the physical pool accounts for directly.
 Whole-persistent snapshot includes prefill hidden state, sampling/token-count/grammar controls,
 KV and execution tables, StateImages and speculative replay/state. Workspace layout comes from
 the startup Op plans and contains only per-unit scratch and the transient Vision bridge;

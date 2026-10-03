@@ -168,7 +168,9 @@ process lifetime. `--vision-residency overlay` removes that cost on memory-tight
 lives in pinned host memory, the sequence plan reserves nothing for Vision, and each image is
 encoded inside a bounded window whose device memory is borrowed for the duration of the encode.
 
-A window is funded from free KV pages when they cover it. Those pages hold nothing, so nothing is
+A window is funded from free KV pages when whole physical lending pieces cover it. A piece that
+shares any live page stays mapped; fragmented free pages can therefore require the weight fallback.
+Those pages hold nothing, so nothing is
 copied, the text weights stay mapped, and the encode runs on its own stream while other lanes keep
 decoding: the lane that owns the image simply yields its prefill units until the encode completes.
 The pages are out of circulation while the loan is open, so the admission capacity shrinks with it

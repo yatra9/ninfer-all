@@ -272,6 +272,21 @@ resume では persistent arena の VA を変えず、全 bytes を元通りに�
 
 `data()` / base pointer は Engine lifetime 中不変とする。
 
+Vision overlay の KV arena は、CUDA の最小 allocation granularity と物理貸出し区画サイズを
+区別する。後者は `src/core/evictable_kv_pool.cu` の `kLendingPieceBytes` 定数で調整し、
+実測で採用値を決める。現在は RTX3090 の比較により 64 MiB を採用する。
+貸出し単位は device の最小 granularity の整数倍に揃える。
+arena 全体の physical capacity は従来通り最小 granularity に揃え、大区画化で増やさない。
+payload 境界を跨ぐ区画は貸出さず、残りは resident backing とする。
+logical KV page、既存 VA、全量 snapshot 形式・容量、Host RAM budget は変更しない。
+Vision は全体が未使用の物理区画だけを借りる。断片化や予約済み page により窓を満たせない場合は、
+既存の weight-tail fallback を使う。貸出し eligibility は区画あたり固定 page 数ではなく
+plane の page stride で判定し、小さい scale plane を除外しながら大区画でも payload を貸せるようにする。
+activation の physical reservation が未作成の early Vision submit では、選択済み計画の
+pending MainKV demand を貸出し上限から除く。窓が満たせなければ early submit を見送り、
+通常の activation reservation 後に KV/weight-tail の選択を行う。大区画で全空き page を
+貸してしまい、その画像 request 自身の materialization を失敗させてはならない。
+
 ### 5.4 Weight arena
 
 weight arena も同じく fixed-VA VMM 化するが、内容の復帰元は RAM snapshot ではなく `.ninfer` artifact とする。

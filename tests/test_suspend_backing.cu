@@ -83,7 +83,7 @@ int main() {
                               chunk, cudaMemcpyDeviceToHost));
         for (auto byte : tail) { require(byte == 0x37); }
 
-        const auto granule = ninfer::EvictableKVPool::device_granularity(device);
+        const auto granule = ninfer::EvictableKVPool::lending_granularity(device);
         ninfer::EvictableKVPool kv(device, {.arena_bytes = 4 * granule, .lendable_prefix_bytes = 2 * granule,
                                           .window_capacity_bytes = granule});
         roundtrip(kv, device);
