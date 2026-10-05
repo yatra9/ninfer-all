@@ -1,6 +1,6 @@
 # NInfer Video MCP 実装計画
 
-更新日: 2026-10-06。状態: 計画作成済み、ユーザー確認事項は回答・反映済み。MCP 本体の実装は未着手。
+更新日: 2026-10-06。状態: 実装中。WSLC 増分ビルド環境を準備済み、共有動画サービスを実装中。
 
 ## 1. 成果物と前提
 
@@ -11,7 +11,7 @@
 - MCP と既存動画入力は同じ source metadata/index を共有する。
 - `inspect_video` は resource link を返す。別 LLM 呼び出し、GPU 推論、全フレームの RGB キャッシュを行わない。
 - 開発・ビルド・テストは Linux/WSLC。ユーザー指定の `FROM ninfer-all:build` を使用し、開発イメージを `ninfer-all:dev`、コンテナ名を `ninfer-all-dev` とする。ホストの Windows ビルドツリーには手を加えない。
-- この依頼の成果物は本計画。実装開始時に各フェーズを進める。ユーザー指定により、実装中は AGENTS.md の `ninfer-video-mcp work checkpoints` に従い、検証済みの独立した作業単位ごとにコミットし、その前に本計画・仕様・関連文書を更新する。
+- 実装開始をユーザーから依頼済み。AGENTS.md の `ninfer-video-mcp work checkpoints` に従い、検証済みの独立した作業単位ごとにコミットし、その前に本計画・仕様・関連文書を更新する。判断が必要な問題がなければ、コミット後も次の作業へ進む。
 
 ## 2. 調査済みの既存実装
 
@@ -180,7 +180,15 @@ CPU テストだけなら GPU を使用しない。実動画・モデルの moun
 - [ ] dev image/container 作成と BuildKit 中間生成物の再利用確認。
 - [ ] Phase 1～5 の実装と検証。
 
-次の作業: 実装依頼後は Phase 0 から開始する。現時点で追加のユーザー回答待ちはない。MCP library/protocol の技術選定と実機互換性検証は Phase 0 の作業として残る。
+次の作業: 共有 source service と metadata/time API を実装し、既存動画入力の回帰を検証する。並行して MCP ライブラリの既存 HTTP server 組み込みを確認する。現時点で追加のユーザー回答待ちはない。
+
+### 実装チェックポイント: WSLC 開発環境
+
+- `tools/video-mcp-dev/` に baseline cache 取り込み Dockerfile、checksum source 同期スクリプト、README を追加。
+- `wslc build -f tools/video-mcp-dev/Dockerfile -t ninfer-all:dev .` と README の run コマンドで `ninfer-all-dev` を起動済み。元 Ninja tree は `/build/cdce3b3aef6da28fdc9d6a913a78b062d76df75a1ffe09d47dde128f92923bc3`、取り込み容量 6.3 GB。
+- `prepare-build.sh` 成功。CUDA 13.1.115、sm_86 を維持。変更前の `ninja -n ninfer-serve` は build-id stamp、main.cpp、link の 3 steps のみで CUDA 再コンパイルなし。
+- コンテナの Python は確認済み `/usr/bin/python3` 3.12.3。CMake registration と汎用 fixture スクリプト用に使用する。既存 maintainer Python 3.11 環境はこの Ubuntu image にない。Python product/converter の変更はない。
+- OpenCode source の MCP SDK は 1.29.0、native lowering の MIME 集合は `video/mp4`, `video/webm`, `video/quicktime`。C++ 候補 `fastmcpp` の license/source を取得して評価中。
 
 計画確定時の検証: schema の JSON parse、3 tools の存在、文書内の相対リンク、変更ファイルの whitespace check を確認済み。今回の変更は計画・仕様・schema・作業規則のみ。実装 build、動画処理テスト、OpenCode E2E は実装未着手のため未実行。
 
