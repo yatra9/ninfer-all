@@ -74,7 +74,4 @@ Run `check-opencode.py --wire <wire.jsonl> --events <opencode-events.jsonl> --re
 URI appears as `video_url` in a later model request from the same agent session and the
 answer contains the expected color. A plausible answer without media does not pass.
 
-Observed limitation on 2026-10-06: the specified exe connected and called the tools but
-discarded resource links before its later model request. Its default runtime was
-AI SDK; `run-opencode.ps1 -Native` selected native but still sent no `video_url`.
-OpenCode E2E is pending confirmation/rebuild of the supplied patch in that executable.
+The initial executable lacked the applied patch and discarded resource links. After the user applied the patch and rebuilt it, both red and blue frame selections passed the same-agent wire/session checks. Normal execution selected native without the opt-in flag. See ACCEPTANCE.md for executable fingerprints and results.

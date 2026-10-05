@@ -1020,7 +1020,7 @@ OpenCode patch と組み合わせた E2E で最終的に NInfer OpenAI request �
 - [x] `resolve_video_time(path, 10)` の後の `resolve_video_time(path, 20)` で再全scanしない
 - [x] 後続 `ninfer-video://` decode でも既存 metadata/index が再利用される
 - [x] source file変更時に cache が invalidationされる
-- [ ] OpenCode + MCP + NInfer のE2Eで同じQwen agentが動画を視覚入力として受け取れる
+- [x] OpenCode + MCP + NInfer のE2Eで同じQwen agentが動画を視覚入力として受け取れる
 
 ---
 

@@ -1828,8 +1828,4 @@ frames and 64 Mi output pixels bound resource use. Cancellation notifications an
 shutdown cancel probe/index work. Decoded video frames are not retained by this cache.
 Full paths and generated URIs should only be inspected in debug logs.
 
-The executable selected for the 2026-10-06 acceptance run connected to these tools,
-but did not attach their native resource links to subsequent model requests, even
-with its native runtime explicitly enabled. That client integration is still
-pending; see [acceptance evidence](../tools/video-mcp-dev/ACCEPTANCE.md). Direct
-NInfer native video inference and tools while the model is suspended passed.
+The rebuilt patched executable passed same-agent native-video E2E on 2026-10-06: frames 2–3 of a neutral-name red/blue fixture were identified as blue and frames 0–1 as red. Each inspect resource link became a video_url in that agent's next model request. See [acceptance evidence](../tools/video-mcp-dev/ACCEPTANCE.md). Direct inference, authentication and tools while the model is suspended also passed.

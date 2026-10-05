@@ -179,9 +179,9 @@ CPU テストだけなら GPU を使用しない。実動画・モデルの moun
 - [x] fastmcpp pinned transport と同一 HTTP server 統合、CPU HTTP 検証。
 - [x] dev image/container 作成と BuildKit 中間生成物の再利用確認。
 - [x] Phase 1～4 の実装と CPU 検証。
-- [ ] Phase 5: 実 server / 指定 OpenCode の同一 agent E2E。
+- [x] Phase 5: 実 server / 指定 OpenCode の同一 agent E2E。
 
-次の作業: 指定モデルを使用し、実 server の認証・suspend 中 tools と指定 OpenCode の E2E を検証する。追加のユーザー回答待ちはない。
+v1 完了。追加の実装・ユーザー判断待ちはない。再検証は tools/video-mcp-dev/README.md の手順を使用する。
 
 ### 実装チェックポイント: WSLC 開発環境
 
@@ -239,3 +239,12 @@ CPU テストだけなら GPU を使用しない。実動画・モデルの moun
 - `check-opencode.py` は実 wire / events の1 session・1 resource linkを照合し `complete=false, native_video_urls_matched=[]` で正しく失敗。外部 exe を改変せず、ユーザーに patch 適用状態の確認・修正・再ビルドをこちらで進めるか、差替え exe を指定するか判断待ち。
 - SPEC §19 は OpenCode E2E 以外を確認済みに更新。v1 全体は未完了。次はこの client 問題を解決して同じ neutral-name fixture を再実行し、後続 request の native video_url と視覚回答を両方確認する。
 - 生の wire/events/runtime log は host `.cache/video-mcp`、実 server reports/logs は停止済み `ninfer-video-mcp-acceptance` の `/acceptance` に残る。observer と acceptance GPU server は停止し、開発 container / model volume は保持。再開は README / start-acceptance.sh に従う。
+
+### 実装チェックポイント: 再ビルド OpenCode の E2E 成功 / v1 完了
+
+- ユーザーが指定 patch を実際に `git apply` して exe を再ビルドしたため、同じ指定 path で再検証。新 version `0.0.0--202610051714`、SHA256 `52C335CDB867B11523CD144083EEDE0268AA8E2ED4C59E4554E3328C5A8C026F`。
+- `acceptance.py` を再実行して `complete=true, native_video_answer=red, auth_and_suspend=passed`。model / WSLC / listener / suspend 中3 tools の検証は引き続き成功。
+- native opt-in flag を追加せず通常の `run-opencode.ps1` で runtime=native。neutral-name `/videos/mystery.mp4` を inspect し、resource_link→file attachment→同じ agent の後続 `video_url` を wire/events で確認。NInfer の後続 request は media=1。
+- frames 2–3 は blue、frames 0–1 は red と正しく回答。両 run の `check-opencode.py` が1 agent session・1 inspect link・matching native video URIありで `complete=true`。後者の inspect 時点で同一 mystery source は index_builds=1 / index_reuses=1 / metadata_probes は増加せず、前 run reader の source/index を再利用。
+- SPEC §19 の全完了条件を満たした。残る実装・判断待ちはない。変更は検証記録と完了 status の更新のみで、以前通過した CPU tests の再実行は不要。
+- 成功 reports は host `.cache/video-mcp/{http-report,opencode-blue-report,opencode-red-report}.json`、blue events/runtime log は suffix blue を付けて保存、最新 events/log は red run。wire summary と container `/acceptance` の証拠も保持。検証用 observer / GPU server を停止し、model volume / development container は保持。

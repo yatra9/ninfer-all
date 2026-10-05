@@ -1,5 +1,7 @@
 # Video MCP acceptance, 2026-10-06
 
+Status: all v1 acceptance conditions passed after the user rebuilt OpenCode with the patch applied.
+
 Environment: WSLC `ninfer-all:dev` from `ninfer-all:build`, CUDA 13.1, RTX 3090.
 The original baseline build directory and compiled model kernels were reused.
 Python 3.12.3 is used only for fixtures and acceptance observers.
@@ -23,7 +25,7 @@ Passed:
 - All three tools succeeded while the model was suspended, without resuming it.
   Explicit resume and the existing `/v1/responses` endpoint then succeeded.
 
-OpenCode E2E remains incomplete:
+Initial OpenCode run before patch application (resolved by the retest below):
 
 - Executable: `E:\koji\work\20260813\opencode\opencode.exe`.
 - Reported version: `0.0.0--202610051423`.
@@ -43,6 +45,27 @@ Raw wire summaries and the latest OpenCode events/runtime log are in
 stopped acceptance container. The observer and GPU server were stopped after the
 checks. The development container and model volume are retained for continuation.
 
-Next: confirm the supplied patch is reflected in the selected executable, or use
-an explicitly selected corrected build. Repeat the same-agent neutral-name red/blue
-fixture and require wire-level video evidence before declaring specification §19 complete.
+Specification §19 is complete after the rebuilt-executable retest below.
+
+## Rebuilt executable retest: passed
+
+The user applied the patch and rebuilt the same executable path. Version:
+`0.0.0--202610051714`; SHA256:
+`52C335CDB867B11523CD144083EEDE0268AA8E2ED4C59E4554E3328C5A8C026F`.
+
+Normal execution selected the native runtime without an explicit opt-in flag.
+Each run used one agent session and one inspect call. Its completed tool state
+contained the file attachment; the next model request contained the exact returned
+URI as `video_url`, and NInfer recorded `media 1`.
+
+| Selected source frames | Returned native URI query | Visual answer | Wire/session check |
+| --- | --- | --- | --- |
+| 2–3 | `start_frame=2&end_frame=3` | blue | passed |
+| 0–1 | `end_frame=1` | red | passed |
+
+The neutral-name fixture `/videos/mystery.mp4` contains red frames 0–1 and blue
+frames 2–3. The second run reused the first run's source/index (`index_builds=1`,
+`index_reuses=1` observed before its reader). The real-model HTTP acceptance also
+passed again, including authentication, native inference and tools while suspended.
+Reports for both color runs and HTTP acceptance are saved under `.cache/video-mcp`.
+All v1 completion conditions now pass. Test servers were stopped after verification.
