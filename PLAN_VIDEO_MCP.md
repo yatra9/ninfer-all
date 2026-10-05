@@ -204,3 +204,9 @@ CPU テストだけなら GPU を使用しない。実動画・モデルの moun
 
 - [公式 SDK 一覧](https://modelcontextprotocol.io/docs/2026-07-28/sdk)
 - [MCP 2025-11-25 Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports) — initialize/session 型の互換候補。採用版は OpenCode と照合して確定する。
+
+### 実装チェックポイント: 共通 URI builder
+
+- `build_local_video_url` を既存 parser と同じ product module に追加。UTF-8・空白・予約文字を percent escape し、既定値を省いた一定順序の query を生成する。生成後に同じ parser で制約を検証する。
+- WSLC 内で既存 `test_local_video_url.cpp` を CPU-only で直接 build/run。既存 path/root/symlink 検証と、日本語・予約文字・scale 精度・全引数の round trip が成功。
+- MCP HTTP/実モデルはまだ未検証。次: fastmcpp transport の同一 server 登録、schema 埋め込みと3 tools の実装。

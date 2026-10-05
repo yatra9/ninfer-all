@@ -45,6 +45,10 @@ struct LocalVideoSpec {
 // absolute path; authorize_local_path must be called before opening it.
 [[nodiscard]] LocalVideoSpec parse_local_video_url(std::string_view value);
 
+// Canonical URI from an authorized absolute path and typed selection controls.
+// Shares the parser's validation and percent-escapes UTF-8 path bytes.
+[[nodiscard]] std::string build_local_video_url(const LocalVideoSpec& spec);
+
 // Requires an explicitly configured root, resolves symlinks, requires a regular file, and returns
 // the canonical path only when it is a component-wise descendant of the canonical root.
 [[nodiscard]] std::filesystem::path authorize_local_path(

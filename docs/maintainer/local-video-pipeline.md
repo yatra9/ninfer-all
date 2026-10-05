@@ -213,3 +213,7 @@ Vision tokens in seven chunks. With the 163,840-token RTX 3090 launch profile, p
 above the baseline. The HTTP 200 response completed in 100.41 seconds with a 99,403-token prompt.
 A client disconnect during the same workload cancelled the request and the next media request
 completed, demonstrating request cleanup and overlay restoration.
+
+The product URI module also provides `build_local_video_url(LocalVideoSpec)` for typed callers.
+It percent-escapes UTF-8 path bytes, omits default controls, and validates the generated URI with
+its parser. MCP and native input therefore share the same selection syntax.

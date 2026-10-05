@@ -209,4 +209,42 @@ std::filesystem::path authorize_local_path(const std::filesystem::path& requeste
     return path;
 }
 
+std::string build_local_video_url(const LocalVideoSpec& spec) {
+    if (!spec.path.is_absolute()) throw std::invalid_argument("local video path must be absolute");
+    std::string result(kScheme);
+    constexpr char digits[]="0123456789ABCDEF";
+    for (const unsigned char c:spec.path.generic_string()) {
+        if ((c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9') ||
+            c=='/' || c=='-' || c=='_' || c=='.' || c=='~') result+=char(c);
+        else { result+='%'; result+=digits[c>>4]; result+=digits[c&15]; }
+    }
+    char separator='?';
+    const auto add=[&](std::string_view name,const std::string& value) {
+        result+=separator; separator='&'; result+=name; result+='='; result+=value;
+    };
+    if (spec.start_frame!=0) add("start_frame",std::to_string(spec.start_frame));
+    if (spec.end_frame) add("end_frame",std::to_string(*spec.end_frame));
+    if (spec.skip_frame!=0) add("skip_frame",std::to_string(spec.skip_frame));
+    if (spec.bbox) {
+        const auto& b=*spec.bbox;
+        add("bbox",std::to_string(b.x)+","+std::to_string(b.y)+","+
+                   std::to_string(b.width)+","+std::to_string(b.height));
+    }
+    if (spec.scale!=1) {
+        std::array<char,64> buffer;
+        const auto encoded=std::to_chars(buffer.data(),buffer.data()+buffer.size(),spec.scale);
+        if (encoded.ec!=std::errc{}) throw std::invalid_argument("scale could not be encoded");
+        add("scale",std::string(buffer.data(),encoded.ptr));
+    }
+    switch (spec.deinterlace) {
+    case DeinterlaceMode::Auto: break;
+    case DeinterlaceMode::On: add("deinterlace","on"); break;
+    case DeinterlaceMode::Off: add("deinterlace","off"); break;
+    default: throw std::invalid_argument("invalid deinterlace mode");
+    }
+    if (spec.autotone) throw std::invalid_argument("autotone is not supported");
+    (void)parse_local_video_url(result);
+    return result;
+}
+
 } // namespace ninfer::product::local_video
