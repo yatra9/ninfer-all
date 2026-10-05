@@ -4,6 +4,7 @@
 #include "fastmcpp/types.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -44,6 +45,19 @@ class StreamableHttpServerWrapper
 {
   public:
     using McpHandler = std::function<fastmcpp::Json(const fastmcpp::Json&)>;
+    using SessionClock = std::chrono::steady_clock;
+    struct SessionPolicy {
+        SessionClock::duration initialization_timeout = std::chrono::seconds(60);
+        SessionClock::duration idle_timeout = std::chrono::minutes(30);
+        std::function<SessionClock::time_point()> now = [] { return SessionClock::now(); };
+    };
+    // Configure before registering routes/starting; active handlers never expire.
+    void set_session_policy(SessionPolicy policy) {
+        if (!policy.now || policy.initialization_timeout <= SessionClock::duration::zero() ||
+            policy.idle_timeout <= SessionClock::duration::zero())
+            throw std::invalid_argument("session timeouts must be positive and clock must be provided");
+        session_policy_ = std::move(policy);
+    }
 
     /**
      * Construct a Streamable HTTP server with an MCP handler.
@@ -161,6 +175,7 @@ class StreamableHttpServerWrapper
     std::string generate_session_id();
     bool check_auth(const std::string& auth_header) const;
     void apply_additional_response_headers(httplib::Response& res) const;
+    void expire_sessions_locked();
 
     McpHandler handler_;
     std::string host_;
@@ -187,6 +202,12 @@ class StreamableHttpServerWrapper
     mutable std::mutex sessions_mutex_;
     std::unordered_map<std::string, std::string> session_versions_;
     std::unordered_set<std::string> initialized_sessions_;
+    struct SessionActivity {
+        SessionClock::time_point created, last_activity;
+        size_t active = 0;
+    };
+    SessionPolicy session_policy_;
+    std::unordered_map<std::string, SessionActivity> session_activity_;
 };
 
 } // namespace fastmcpp::server

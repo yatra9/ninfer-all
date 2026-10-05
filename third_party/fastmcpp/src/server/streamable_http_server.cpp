@@ -136,6 +136,26 @@ void StreamableHttpServerWrapper::register_routes(httplib::Server& server)
 
             try
             {
+                // This guard pins accepted requests, including initialization and
+                // cancellation notifications, until handler processing finishes.
+                struct ActivityGuard {
+                    StreamableHttpServerWrapper* owner;
+                    std::string id;
+                    ~ActivityGuard() {
+                        if (id.empty()) return;
+                        std::lock_guard lock(owner->sessions_mutex_);
+                        auto it = owner->session_activity_.find(id);
+                        if (it != owner->session_activity_.end()) {
+                            --it->second.active;
+                            it->second.last_activity = owner->session_policy_.now();
+                        }
+                    }
+                } activity_guard{this, {}};
+                auto pin_locked = [&](const std::string& id) {
+                    auto& activity = session_activity_.at(id);
+                    activity_guard.id = id;
+                    ++activity.active;
+                };
                 // Security: Check authentication if configured
                 if (!auth_token_.empty())
                 {
@@ -216,10 +236,14 @@ void StreamableHttpServerWrapper::register_routes(httplib::Server& server)
 
                     {
                         std::lock_guard<std::mutex> lock(sessions_mutex_);
+                        expire_sessions_locked();
                         if (sessions_.size() >= MAX_SESSIONS) { res.status=503; return; }
                         sessions_[session_id] = session;
                         session_versions_[session_id]=protocol::negotiate(
                             message["params"]["protocolVersion"].get<std::string>());
+                        const auto now = session_policy_.now();
+                        session_activity_[session_id] = {now, now, 0};
+                        pin_locked(session_id);
                     }
                 }
                 else if (session_id.empty())
@@ -234,6 +258,7 @@ void StreamableHttpServerWrapper::register_routes(httplib::Server& server)
                 {
                     // Verify session exists
                     std::lock_guard<std::mutex> lock(sessions_mutex_);
+                    expire_sessions_locked();
                     if (sessions_.find(session_id) == sessions_.end())
                     {
                         res.status = 404;
@@ -258,6 +283,7 @@ void StreamableHttpServerWrapper::register_routes(httplib::Server& server)
                             "application/json");
                         return;
                     }
+                    pin_locked(session_id);
                 }
 
                 // Inject session_id into request meta for handler access
@@ -444,6 +470,7 @@ void StreamableHttpServerWrapper::register_routes(httplib::Server& server)
                      bool did_remove = false;
                      {
                          std::lock_guard<std::mutex> lock(sessions_mutex_);
+                         expire_sessions_locked();
                          const auto found = session_versions_.find(session_id);
                          auto version = req.get_header_value("MCP-Protocol-Version");
                          if (version.empty()) version = "2025-03-26";
@@ -455,6 +482,7 @@ void StreamableHttpServerWrapper::register_routes(httplib::Server& server)
                          did_remove = sessions_.erase(session_id) > 0;
                          session_versions_.erase(session_id);
                          initialized_sessions_.erase(session_id);
+                         session_activity_.erase(session_id);
                      }
 
                      if (did_remove)
@@ -469,6 +497,23 @@ void StreamableHttpServerWrapper::register_routes(httplib::Server& server)
                      }
                  });
 
+}
+
+void StreamableHttpServerWrapper::expire_sessions_locked()
+{
+    const auto now = session_policy_.now();
+    for (auto it = session_activity_.begin(); it != session_activity_.end();) {
+        const auto& activity = it->second;
+        const bool initialized = initialized_sessions_.contains(it->first);
+        const auto elapsed = now - (initialized ? activity.last_activity : activity.created);
+        const auto limit = initialized ? session_policy_.idle_timeout : session_policy_.initialization_timeout;
+        if (activity.active == 0 && elapsed >= limit) {
+            sessions_.erase(it->first);
+            session_versions_.erase(it->first);
+            initialized_sessions_.erase(it->first);
+            it = session_activity_.erase(it);
+        } else ++it;
+    }
 }
 
 bool StreamableHttpServerWrapper::start()
@@ -536,7 +581,8 @@ void StreamableHttpServerWrapper::stop()
         std::lock_guard<std::mutex> lock(sessions_mutex_);
         sessions_.clear();
         session_versions_.clear();
-    initialized_sessions_.clear();
+        initialized_sessions_.clear();
+        session_activity_.clear();
     }
 
     bound_port_.store(0); // Reset the bound port's value.

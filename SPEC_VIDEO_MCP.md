@@ -1064,3 +1064,7 @@ VideoSourceService
 ### 監査補足: inspect_videoの出力geometry
 
 inspect_videoはnative動画入力と共通のmetadata-only geometry計算を使う。crop後の各寸法へscaleを掛けて整数へroundし、最寄りの32の倍数へ丸める（最低32）。pixel上限は丸め後のwidth×heightに適用する。この確認のためのframe index構築は行わない。
+
+### 監査補足: sessionの有効期限
+
+初期化未完了sessionは作成から60秒、初期化完了sessionは最後のrequest完了から30分で失効する。時刻はmonotonic clockを使う。POST/DELETE受信時に期限切れsessionと関連状態を回収し、1000 sessionの上限判定前にも回収する。handler実行中のsessionは失効させず、完了時にidle期限を更新する。失効したsession IDにはHTTP404を返すため、clientはinitializeし直す。DELETEによる明示終了も引き続き可能。

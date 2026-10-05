@@ -304,3 +304,11 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - media moduleにmetadata-onlyのoutput_geometryを追加し、native planとinspect_videoが同じcrop/scale/32 alignment/pixel limit計算を使用。小さいscaleは最低32x32へ丸め、alignment後の上限超過を拒否する。geometry計算自体はindexを作らない。
 - 0.001 scale、native/helper寸法一致、index未構築、alignment後のみpixel上限超過する147.78 scaleを回帰テストに追加。WSLC source service/MCP HTTP CTest成功。
 - 次: session expirationを修正し、全関連CPU回帰とproduction target buildを実行する。
+
+### 監査修正4: session expiration / 監査修正完了
+
+- pinned fastmcpp transportにmonotonic session policyを追加。未初期化60秒、初期化済みidle30分。POST/DELETEでlazy回収し、1000件のadmission前にも回収。active handlerをRAIIでpinし、完了時にidle期限を更新。DELETE/stopはactivity stateも除去。
+- 独立clockを使う実HTTP transport testを追加。1000件満杯から回収/再initialize、期限切れ404、idle refresh、active tool中の期限超過と完了後の再利用を確認。SPEC/serving guide/vendor変更記録へ反映。
+- WSLC ninfer-all:dev / ninfer-all-devでninfer-serve、ninfer_tests、MCP HTTP fixture、source service、payload targetを増分build成功。関連CTest 12/12成功（21.49秒）。完全diff reviewとgit diff --check成功。
+- GPU/実model/OpenCode E2Eは再実行していない。修正したdemux/cache待機/geometry/HTTP session経路はCPU回帰で検証し、既存frontendの画像/動画tokens一致も成功。build unknown表示はrsync sourceにgit metadataがない既知の制限。
+- 監査4件の修正完了。判断待ち・既知の未修正事項なし。次の実装作業なし。再検証時は本章のtargetsと関連CTestを使用する。

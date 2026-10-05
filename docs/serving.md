@@ -1810,7 +1810,10 @@ from accepted output token IDs, including a stop token whose decoded text may be
 
 ## Native video MCP (Linux / WSLC)
 
-The existing HTTP listener also serves `/mcp`. Configure `--local-media-root /videos`
+The existing HTTP listener also serves `/mcp`. Sessions expire after 60 seconds
+without completing initialization, or 30 minutes idle after initialization.
+Active tool calls retain their session until completion. Expired session IDs
+return HTTP 404; initialize again to reconnect. Configure `--local-media-root /videos`
 to enable `get_video_metadata`, `resolve_video_time`, and `inspect_video`. Each tool
 accepts an absolute local file path visible inside the container; selection options
 are separate tool arguments. Discovery remains available without a media root.

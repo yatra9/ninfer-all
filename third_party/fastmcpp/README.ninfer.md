@@ -26,3 +26,11 @@ server-initiated SSE stream; POST returns JSON. Sessions are closed with DELETE.
 The parent server enforces Origin and authentication on all MCP methods.
 
 Initialized notification state is bounded by the session map and cleared on DELETE/shutdown. Session IDs use OS entropy directly on Linux.
+
+Sessions that do not finish initialization expire 60 seconds after creation.
+Initialized sessions expire after 30 minutes without completed request activity.
+POST/DELETE lazily reclaim expired sessions before lookup/admission, including
+at the 1000-session capacity limit. Active handlers pin their session until they
+finish, then refresh its idle deadline. Expired session IDs return HTTP 404;
+clients reinitialize. Timeout policy uses a monotonic clock and can be configured
+before route registration (the clock hook also supports deterministic tests).

@@ -104,6 +104,9 @@ ninfer_add_test(ninfer_http_transport_test
   LIBRARIES ninfer_serve)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_executable(ninfer_video_mcp_http_fixture "${CMAKE_CURRENT_LIST_DIR}/../video_mcp_http_fixture.cpp")
+  ninfer_add_test(ninfer_mcp_session_expiry_test
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_mcp_session_expiry.cpp"
+    LIBRARIES ninfer_mcp_transport)
   ninfer_test_includes(ninfer_video_mcp_http_fixture)
   target_link_libraries(ninfer_video_mcp_http_fixture PRIVATE ninfer_video_mcp)
   add_test(NAME ninfer_video_mcp_http_test COMMAND "${Python3_EXECUTABLE}"
