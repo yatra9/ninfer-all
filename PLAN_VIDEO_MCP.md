@@ -286,3 +286,9 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - SPEC_VIDEO.md §5.0と型、SPEC_VIDEO_MCP.md §9.2/9.3、schema/tool説明、serving guide、PowerShell helper -Frame、acceptance再実行手順・記録を更新。image modeでも互換MIME video/mp4を保持し、NInferでimage tokens/位置情報へ変換する。
 - 結果はtools/video-mcp-dev/ACCEPTANCE.md、raw evidenceはhost .cache/video-mcpのhttp-frame-report / opencode-frame-report / opencode-frame-events / opencode-frame-run / frame-wireとacceptance container /acceptanceに保持。検証用GPU server/observer/一時build HTTP配信を停止。GPU0MiBを確認。
 - 完全diff reviewとgit diff --checkを実施。build id unknownはrsync checkoutにgit metadataがない既知のbuild表示制限のみ。要求範囲の未検証事項・既知の不具合・判断待ちはない。単一のcoherent feature unitとしてcommitする。次の実装作業なし。
+
+### 監査修正1: MPEG-PS再open
+
+- cached reopen時にstreamが未発見ならFFmpegのstream discoveryへfallbackし、probe packetsを保持。通常のheader-based containerは従来通りcached parametersを再利用。metadata_probesはsource metadata作成回数を表し、reopenでのformat discoveryは含まない。
+- MPEG2/MPEG-PS fixtureを追加しmetadata→time resolution→readerを検証。WSLC増分buildとvideo_source_service CTest成功。
+- 次: frontend acquireのcancellation伝播、geometry統一、session expirationを修正。

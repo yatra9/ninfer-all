@@ -98,6 +98,11 @@ struct Input {
             av_dict_free(&opts); check_io(rc, "open video");
             if (cached) {
                 stream = cached->info.stream_index;
+                // MPEG-PS discovers its streams while reading packets, unlike
+                // header-based containers. Preserve FFmpeg's buffered probe
+                // packets so reopening does not discard the first frames.
+                if (stream >= 0 && unsigned(stream) >= fmt->nb_streams)
+                    check_io(avformat_find_stream_info(fmt, nullptr), "discover reopened video streams");
                 require(stream >= 0 && unsigned(stream) < fmt->nb_streams,
                         "cached video stream is absent from reopened source");
                 check(avcodec_parameters_copy(fmt->streams[stream]->codecpar, cached->parameters),

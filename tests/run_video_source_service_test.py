@@ -42,7 +42,10 @@ with tempfile.TemporaryDirectory(prefix="ninfer-video-source-") as directory:
     mixed = root / "mixed.mkv"
     run("ffmpeg", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(concat),
         "-c", "copy", "-y", str(mixed))
-    for path, interlace in [(coarse, "progressive"), (mixed, "mixed")]:
+    mpeg = root / "packet-streams.mpeg"
+    run("ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+        "testsrc2=size=96x64:rate=25:duration=1", "-c:v", "mpeg2video", "-y", str(mpeg))
+    for path, interlace in [(coarse, "progressive"), (mixed, "mixed"), (mpeg, "progressive")]:
         probe = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_frames",
                               "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", str(path)))
         stamps = [float(frame["best_effort_timestamp_time"]) for frame in probe["frames"]]
