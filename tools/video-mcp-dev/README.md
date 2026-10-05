@@ -25,3 +25,56 @@ Model/video mounts and a free GPU are required only for inference E2E. Pass loca
 video paths visible inside the container, and configure `--local-media-root` to
 their authorized parent directory. The published port is restricted to host
 localhost for the Windows OpenCode client.
+
+## Real-model acceptance
+
+The selected model is copied into the native `ninfer-video-mcp-models` volume and
+checked against its distributed `SHA256SUMS`. Keep the original Windows artifact.
+The acceptance container uses the same `ninfer-all:dev` image with the model volume
+read-only at `/models`, the repository read-only at `/workspace`, and localhost port
+18081 mapped to 8080. `start-acceptance.sh` records the exact model and serve options.
+It enables model suspend so `acceptance.py` can verify CPU-only tools while suspended.
+
+The development container can temporarily expose its built executable with Python:
+
+```sh
+nohup python3 -m http.server 8080 --bind 0.0.0.0 \
+  --directory "$(cat /build/video-mcp-build-dir)/apps" >/tmp/video-mcp-build-http.log 2>&1 </dev/null &
+```
+
+Run `prepare-acceptance.sh http://<dev-container-ip>:8080/ninfer-serve` inside the
+acceptance container, then start the server using:
+
+```sh
+nohup sh /workspace/tools/video-mcp-dev/start-acceptance.sh \
+  >/acceptance/server.log 2>&1 </dev/null & echo $! >/acceptance/server.pid
+python3 /workspace/tools/video-mcp-dev/acceptance.py
+```
+
+`acceptance.py` verifies API-key protection, initialize/discovery, two resolves,
+inspect → native video inference, shared source/index reuse in debug logs, all three
+tools while suspended, resume and the existing Responses endpoint. Its report is
+`/acceptance/http-report.json`. Debug paths and test credentials are fixture-only.
+
+## OpenCode acceptance
+
+Use `run-opencode.ps1` with the user-selected executable and `opencode.example.json`.
+The script isolates OpenCode data/config/state/cache beneath `.cache/video-mcp` and
+restricts the acceptance agent to these MCP tools. The neutral-name fixture has red
+frames 0–1 and blue frames 2–3. Check the exact selected range, not the filename.
+
+For wire evidence, `recording-proxy.py` is an acceptance-only observer. Run it in a
+separate WSLC container with `--upstream http://<acceptance-container-ip>:8080`, publish
+its port 8080 at host localhost:18082, and change both URLs in the example config to
+18082. It forwards auth/session headers and records `/tmp/video-mcp-wire.jsonl` without
+recording prompts or credentials. The production MCP remains inside NInfer's listener.
+
+Run `check-opencode.py --wire <wire.jsonl> --events <opencode-events.jsonl> --report
+<report.json>` with a checked Python interpreter. It fails unless a returned resource
+URI appears as `video_url` in a later model request from the same agent session and the
+answer contains the expected color. A plausible answer without media does not pass.
+
+Observed limitation on 2026-10-06: the specified exe connected and called the tools but
+discarded resource links before its later model request. Its default runtime was
+AI SDK; `run-opencode.ps1 -Native` selected native but still sent no `video_url`.
+OpenCode E2E is pending confirmation/rebuild of the supplied patch in that executable.

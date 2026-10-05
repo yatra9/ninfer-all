@@ -121,12 +121,17 @@ def main():
                 {"name": "resolve_video_time", "arguments": {"path": str(long_video), "time_seconds": 1}}, 42)))
             worker.start()
             time.sleep(0.03)
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as health:
+                assert health.status == 200 and health.read() == b"ok"
             assert rpc("notifications/cancelled", {"requestId": 42}, ident=None)[0] == 202
             worker.join(timeout=10)
             assert pending and pending[0][2]["result"]["isError"]
             assert "cancelled" in pending[0][2]["result"]["content"][0]["text"]
             # Failed/cancelled indexes are not published; retry succeeds.
             assert not call("resolve_video_time", {"path": str(long_video), "time_seconds": 1})["isError"]
+            for second in (10, 20):
+                resolved = call("resolve_video_time", {"path": str(long_video), "time_seconds": second})
+                assert resolved["structuredContent"]["nearest_frame_number"] == second * 1000
             assert http(method="DELETE")[0] == 204
             assert rpc("ping")[0] == 404
             print("video MCP HTTP contracts passed")

@@ -1827,3 +1827,9 @@ Four concurrent tool calls, a 120-second checkpoint deadline, two million indexe
 frames and 64 Mi output pixels bound resource use. Cancellation notifications and
 shutdown cancel probe/index work. Decoded video frames are not retained by this cache.
 Full paths and generated URIs should only be inspected in debug logs.
+
+The executable selected for the 2026-10-06 acceptance run connected to these tools,
+but did not attach their native resource links to subsequent model requests, even
+with its native runtime explicitly enabled. That client integration is still
+pending; see [acceptance evidence](../tools/video-mcp-dev/ACCEPTANCE.md). Direct
+NInfer native video inference and tools while the model is suspended passed.

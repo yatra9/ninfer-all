@@ -1006,20 +1006,20 @@ OpenCode patch と組み合わせた E2E で最終的に NInfer OpenAI request �
 
 以下をすべて満たしたら v1 完了。
 
-- [ ] `http://127.0.0.1:<port>/mcp` で MCP Streamable HTTP が利用可能
-- [ ] `tool-schema.json` の3 toolsが公開される
-- [ ] `get_video_metadata` が実動画 metadata を返す
-- [ ] CFR/VFR/audio/interlace 情報を schemaどおり返す
-- [ ] `resolve_video_time` が実 presentation timestamp から0-based source frameを返す
-- [ ] VFRで `average_fps` を frame mapping に使用しない
-- [ ] `inspect_video` が canonical `ninfer-video://` resource_link を返す
-- [ ] `inspect_video` 自身は別LLM inferenceを実行しない
-- [ ] MCP tools と `ninfer-video://` decoder が同じ `VideoSourceService` を使用する
-- [ ] metadata cache が共有される
-- [ ] frame timestamp index が共有される
-- [ ] `resolve_video_time(path, 10)` の後の `resolve_video_time(path, 20)` で再全scanしない
-- [ ] 後続 `ninfer-video://` decode でも既存 metadata/index が再利用される
-- [ ] source file変更時に cache が invalidationされる
+- [x] `http://127.0.0.1:<port>/mcp` で MCP Streamable HTTP が利用可能
+- [x] `tool-schema.json` の3 toolsが公開される
+- [x] `get_video_metadata` が実動画 metadata を返す
+- [x] CFR/VFR/audio/interlace 情報を schemaどおり返す
+- [x] `resolve_video_time` が実 presentation timestamp から0-based source frameを返す
+- [x] VFRで `average_fps` を frame mapping に使用しない
+- [x] `inspect_video` が canonical `ninfer-video://` resource_link を返す
+- [x] `inspect_video` 自身は別LLM inferenceを実行しない
+- [x] MCP tools と `ninfer-video://` decoder が同じ `VideoSourceService` を使用する
+- [x] metadata cache が共有される
+- [x] frame timestamp index が共有される
+- [x] `resolve_video_time(path, 10)` の後の `resolve_video_time(path, 20)` で再全scanしない
+- [x] 後続 `ninfer-video://` decode でも既存 metadata/index が再利用される
+- [x] source file変更時に cache が invalidationされる
 - [ ] OpenCode + MCP + NInfer のE2Eで同じQwen agentが動画を視覚入力として受け取れる
 
 ---

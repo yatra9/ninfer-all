@@ -229,3 +229,13 @@ CPU テストだけなら GPU を使用しない。実動画・モデルの moun
 - `ninfer-serve`、CPU fixture、既存 `ninfer_tests` bundle を WSLC で build。元モデル CUDA kernels は再コンパイルなし。関連 CTest 10件が成功: source service、URI、OpenAI/Anthropic schema、Responses store、MCP proxy、HTTP error/transport、MCP HTTP、local-video payload。MCP fixture は cancellation と再試行、media-root 無効 discovery、2025-06-18/11-25、MP4/MKV link、malformed/unsupported requests を検証。
 - source fixture を coarse 30000/1001 CFR MKV と progressive/interlaced mixed MKV へ拡張。concat 元の container duration により境界 PTS が重なった fixture を duration 指定で修正し、service test 再実行成功。欠損・重複 PTS を許容する product 変更はしていない。
 - 未検証: 実 server 認証・model suspend 中 tools、指定 exe discovery/同一 agent native-video E2E。次は Phase 5。E2E container `ninfer-video-mcp-acceptance` (image ninfer-all:dev, model volume read-only, port localhost:18081) を準備済み。モデルはまだ起動していない。dev binary の一時配信は開発 container の `/build/.../apps`、port 18080。
+
+### 実装チェックポイント: 実 server 検証済み / OpenCode 結合で停止
+
+- `e4a8c2ac` に MCP transport / 3 tools の実装を commit 済み。Phase 5 の独立検証と再実行手順を `tools/video-mcp-dev/` に追加。結果は `ACCEPTANCE.md` にまとめた。
+- 指定 model + WSLC + RTX3090 で実 NInfer listener の auth、metadata→resolve→resolve→inspect→native video inference が成功。red と回答し、debug counters は metadata probes=1 / index builds=1 / index reuses=3 / decoder opens=3。実 reader も同じ source/index を再利用。
+- `--enable-model-suspend --suspend-snapshot-memory pageable` を使い、model suspended のまま3 toolsを実行成功。明示 resume と既存 Responses endpoint も成功。CPU HTTP test に scan 中 health と10/20秒の resolve を追加し、再検証済み。
+- 指定 OpenCode exe (`0.0.0--202610051423`, SHA256 `4BDF1B83DC9030030D3575DCA643160D7787F72C6A4892284F809E798C60D90D`) の discovery と tool call は成功。しかし受け取った resource_link が後続 model request の video_url にならない。default は ai-sdk、明示 native flag=true でも video_url 0件。native run は blue と回答したが、wire と server media 記録がないため視覚 E2E 成功とは扱わない。
+- `check-opencode.py` は実 wire / events の1 session・1 resource linkを照合し `complete=false, native_video_urls_matched=[]` で正しく失敗。外部 exe を改変せず、ユーザーに patch 適用状態の確認・修正・再ビルドをこちらで進めるか、差替え exe を指定するか判断待ち。
+- SPEC §19 は OpenCode E2E 以外を確認済みに更新。v1 全体は未完了。次はこの client 問題を解決して同じ neutral-name fixture を再実行し、後続 request の native video_url と視覚回答を両方確認する。
+- 生の wire/events/runtime log は host `.cache/video-mcp`、実 server reports/logs は停止済み `ninfer-video-mcp-acceptance` の `/acceptance` に残る。observer と acceptance GPU server は停止し、開発 container / model volume は保持。再開は README / start-acceptance.sh に従う。
