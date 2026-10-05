@@ -298,3 +298,9 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - request checkpoint付きOptionsを専用cacheと共有cache双方のacquireへ渡した。初回probeおよびprobe mutex待機もキャンセル/期限の対象。
 - 別requestのprobeをmutex保持状態で止め、frontend waiterがcancel/deadline双方で解除前に終了する回帰テストを追加。cache再利用も確認。WSLC buildとlocal_video_payload CTest成功。
 - 次: geometry統一とsession expiration。GPU/実OpenCode再検証は本修正のCPU待機経路には不要。
+
+### 監査修正3: MCP/native geometry統一
+
+- media moduleにmetadata-onlyのoutput_geometryを追加し、native planとinspect_videoが同じcrop/scale/32 alignment/pixel limit計算を使用。小さいscaleは最低32x32へ丸め、alignment後の上限超過を拒否する。geometry計算自体はindexを作らない。
+- 0.001 scale、native/helper寸法一致、index未構築、alignment後のみpixel上限超過する147.78 scaleを回帰テストに追加。WSLC source service/MCP HTTP CTest成功。
+- 次: session expirationを修正し、全関連CPU回帰とproduction target buildを実行する。

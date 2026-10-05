@@ -105,6 +105,9 @@ def main():
             for invalid_frame in (-1, 1.5, True, 8, 2**64 - 1):
                 assert call("inspect_video", {"path": str(path), "instruction": "x",
                     "frame": invalid_frame})["isError"]
+            assert not call("inspect_video", {"path": str(path), "instruction": "small", "scale": 0.001})["isError"]
+            # Raw pixels fit 64 Mi pixels, but rounding to 32 pushes them over it.
+            assert call("inspect_video", {"path": str(path), "instruction": "aligned", "scale": 147.78})["isError"]
             mkv = root / "native.mkv"
             subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-c", "copy", "-y", str(mkv)], check=True)
             assert call("inspect_video", {"path": str(mkv), "instruction": "color"})["content"][1]["mimeType"] == "video/mp4"

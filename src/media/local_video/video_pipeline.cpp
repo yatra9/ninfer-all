@@ -274,6 +274,20 @@ struct Scaler {
     }
 };
 } // namespace
+OutputGeometry output_geometry(const Info& info, const Options& options) {
+    validate(options);
+    require_resource(info.width > 0 && info.height > 0 &&
+        std::int64_t(info.width) * info.height <= options.max_pixels,
+        "source dimensions exceed max_pixels");
+    const Rect crop = options.crop.value_or(Rect{0, 0, info.width, info.height});
+    require(std::int64_t(crop.x) + crop.width <= info.width &&
+            std::int64_t(crop.y) + crop.height <= info.height,
+            "bbox exceeds decoded frame bounds");
+    OutputGeometry result{output_dimension(crop.width, options), output_dimension(crop.height, options)};
+    require_resource(std::int64_t(result.width) * result.height <= options.max_pixels,
+                     "scaled dimensions exceed max_pixels");
+    return result;
+}
 
 Info inspect(const std::filesystem::path& path) { Input in(path); return inspect_input(in); }
 
@@ -733,16 +747,10 @@ VideoPlan VideoSource::plan(const Options& options) {
     require(!impl_->index->empty(), "video contains no decoded frame");
     require(static_cast<std::uint64_t>(options.start) < impl_->index->size(),
             "start_frame is beyond EOF");
-    const Rect crop = options.crop.value_or(Rect{0, 0, impl_->metadata.width,
-                                                  impl_->metadata.height});
-    require(std::int64_t(crop.x) + crop.width <= impl_->metadata.width &&
-                std::int64_t(crop.y) + crop.height <= impl_->metadata.height,
-            "bbox exceeds decoded frame bounds");
+    const auto dimensions = output_geometry(impl_->metadata, options);
     VideoPlan result;
-    result.width = output_dimension(crop.width, options);
-    result.height = output_dimension(crop.height, options);
-    require_resource(std::int64_t(result.width) * result.height <= options.max_pixels,
-                     "scaled dimensions exceed max_pixels");
+    result.width = dimensions.width;
+    result.height = dimensions.height;
     result.index_stats = impl_->index_stats;
     const std::int64_t available_end = static_cast<std::int64_t>(impl_->index->size() - 1);
     const std::int64_t selected_end =

@@ -187,12 +187,14 @@ struct VideoMcpServer::Impl {
         if (metadata.frame_count && (selection.frame.value_or(selection.start_frame) >= *metadata.frame_count ||
             (selection.end_frame && *selection.end_frame >= *metadata.frame_count)))
             throw ToolError("invalid_frame_range", "Selection exceeds exact source frame count");
-        const double width = (selection.bbox ? selection.bbox->width : info.width) * selection.scale;
-        const double height = (selection.bbox ? selection.bbox->height : info.height) * selection.scale;
-        if (!std::isfinite(width * height) || width < 1 || height < 1 ||
-            width > std::numeric_limits<int>::max() || height > std::numeric_limits<int>::max() ||
-            width * height > options.max_pixels)
-            throw ToolError("resource_limit", "Scaled output geometry exceeds the video pixel limit");
+        auto geometry_options = options;
+        geometry_options.scale = selection.scale;
+        geometry_options.alignment = 32;
+        if (selection.bbox) {
+            const auto& b = *selection.bbox;
+            geometry_options.crop = media::local_video::Rect{b.x, b.y, b.width, b.height};
+        }
+        (void)media::local_video::output_geometry(info, geometry_options);
         const auto uri = url::build_local_video_url(selection);
         if (logger) logger->debug("video MCP inspect uri={}", uri);
         // Custom native resource: no encoded body is served. MIME selects the client's

@@ -58,6 +58,9 @@ struct Frame {
     bool deinterlaced = false;
     std::vector<std::uint8_t> rgb;
 };
+struct OutputGeometry { int width, height; };
+// Metadata-only calculation: does not decode or build a frame index.
+OutputGeometry output_geometry(const Info& info, const Options& options);
 struct Stats {
     std::int64_t indexed_frames = 0, decoded_frames = 0, selected_frames = 0;
     std::int64_t first_decoded_index = -1;

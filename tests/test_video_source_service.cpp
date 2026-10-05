@@ -19,6 +19,12 @@ int main(int argc,char** argv) {
             auto concurrent=std::async(std::launch::async,[&]{return service.acquire(path);});
             expect(concurrent.get()==source,"concurrent source probe was duplicated");
             auto before=source->metadata();
+            Options tiny; tiny.scale=0.001; tiny.alignment=32;
+            const auto dimensions=output_geometry(before.info,tiny);
+            expect(dimensions.width==32 && dimensions.height==32,"small scale must align to minimum geometry");
+            expect(source->source_stats().index_builds==0,"geometry must not build an index");
+            auto tiny_plan=source->plan(tiny);
+            expect(tiny_plan.width==dimensions.width && tiny_plan.height==dimensions.height,"native geometry disagrees");
             expect(before.info.audio_stream_count==fixture.at("audio"),"wrong audio stream count");
             expect(!before.frame_count && !before.variable_frame_rate,"probe invented exact metadata");
             const auto times=fixture.at("times").get<std::vector<double>>();

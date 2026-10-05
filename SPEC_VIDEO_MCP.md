@@ -1060,3 +1060,7 @@ VideoSourceService
 - 3 tools の path は絶対 local path に統一する。query の分解は行わず、`?` 等はファイル名の一部として扱う。root 認可と symlink 解決は全 call で実施する。
 - tool call は最大4並行、scan 上限2,000,000 frames、geometry 上限64 Mi pixels、120秒 deadline。MCP cancelled 通知と shutdown は probe/scan/wait の checkpoint へ伝播する。OS filesystem 操作自体は同期的で、割り込み不能な filesystem syscall の即時停止までは保証しない。
 - 未設定 local-media-root でも discovery は可能。実 tool は local_media_disabled の tool error を返す。既存 API key を全 MCP request に適用し、OPTIONS は既存 CORS policy に従う。Host は loopback または明示 bind host、Origin は同一 HTTP origin を検証する。
+
+### 監査補足: inspect_videoの出力geometry
+
+inspect_videoはnative動画入力と共通のmetadata-only geometry計算を使う。crop後の各寸法へscaleを掛けて整数へroundし、最寄りの32の倍数へ丸める（最低32）。pixel上限は丸め後のwidth×heightに適用する。この確認のためのframe index構築は行わない。
