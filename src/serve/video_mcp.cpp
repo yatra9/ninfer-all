@@ -162,6 +162,11 @@ struct VideoMcpServer::Impl {
         }
         url::LocalVideoSpec selection;
         selection.path = path;
+        if (args.contains("frame")) {
+            if (args.contains("start_frame") || args.contains("end_frame") || args.contains("skip_frame"))
+                throw ToolError("invalid_frame_selection", "frame cannot be combined with start_frame, end_frame or skip_frame");
+            selection.frame = args["frame"].get<std::int64_t>();
+        }
         selection.start_frame = args.value("start_frame", std::int64_t(0));
         selection.skip_frame = args.value("skip_frame", std::int64_t(0));
         if (args.contains("end_frame")) selection.end_frame = args["end_frame"].get<std::int64_t>();
@@ -179,7 +184,7 @@ struct VideoMcpServer::Impl {
             if (std::int64_t(b.x) + b.width > info.width || std::int64_t(b.y) + b.height > info.height)
                 throw ToolError("invalid_bbox", "Crop extends outside source dimensions");
         }
-        if (metadata.frame_count && (selection.start_frame >= *metadata.frame_count ||
+        if (metadata.frame_count && (selection.frame.value_or(selection.start_frame) >= *metadata.frame_count ||
             (selection.end_frame && *selection.end_frame >= *metadata.frame_count)))
             throw ToolError("invalid_frame_range", "Selection exceeds exact source frame count");
         const double width = (selection.bbox ? selection.bbox->width : info.width) * selection.scale;
@@ -195,7 +200,7 @@ struct VideoMcpServer::Impl {
         return {{"content", Json::array({
             {{"type", "text"}, {"text", args["instruction"].get<std::string>()}},
             {{"type", "resource_link"}, {"uri", uri}, {"name", path.filename().string()},
-             {"description", "Selected native video frames: " + args["instruction"].get<std::string>()},
+             {"description", (selection.frame ? "Single source frame as an image: " : "Selected native video frames: ") + args["instruction"].get<std::string>()},
              {"mimeType", "video/mp4"}}})}, {"isError", false}};
     }
 

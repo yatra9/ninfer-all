@@ -1692,6 +1692,50 @@ int test_attention_pairs_are_diagnostic(const Frontend& frontend) {
     return failures;
 }
 
+int test_local_frame_image_prepare(const Frontend& frontend) {
+#ifdef _WIN32
+    return 0; // Native Windows does not offer the local-video pipeline.
+#else
+    struct Temporary {
+        std::filesystem::path path = std::filesystem::temp_directory_path() /
+            ("ninfer-frame-image-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".ppm");
+        ~Temporary() { std::error_code ignored; std::filesystem::remove(path, ignored); }
+    } file;
+    const auto rgb = gradient_ppm();
+    { std::ofstream stream(file.path, std::ios::binary);
+      stream.write(reinterpret_cast<const char*>(rgb.data()), rgb.size()); }
+    auto input = image_input();
+    auto& media = input.messages.front().parts.back().media;
+    media.kind = ninfer::MediaKind::Video;
+    media.bytes.clear();
+    ninfer::OwnedLocalVideo local;
+    local.path = file.path;
+    local.frame = 0;
+    media.local_video = local;
+    const auto counted = frontend.count_tokens(input);
+    const auto prepared = frontend.prepare(input);
+    const auto& data = FrontendFactory::inspect(prepared);
+    const auto ordinary = frontend.prepare(image_input());
+    const auto& reference = FrontendFactory::inspect(ordinary);
+    int failures = check(data.token_ids == reference.token_ids && data.positions == reference.positions &&
+                          data.token_types == reference.token_types && data.rope_delta == reference.rope_delta &&
+                          counted == data.token_ids.size(),
+                          "frame mode must use the same prompt tokens and positions as an image");
+    failures += check(data.vision_items.size() == 1 &&
+                          data.vision_items.front().modality == ninfer::models::qwen3_5::PromptModality::Image &&
+                          data.vision_items.front().grid.temporal == 1 &&
+                          data.vision_items.front().timestamps.empty() && data.local_videos.front(),
+                          "frame mode must retain an image modality with lazy local pixels");
+    input.messages.front().parts.back().media.local_video->frame.reset();
+    const auto video = frontend.prepare(input);
+    const auto& video_data = FrontendFactory::inspect(video);
+    failures += check(video_data.vision_items.front().modality == ninfer::models::qwen3_5::PromptModality::Video &&
+                          video_data.token_ids != data.token_ids,
+                          "an ordinary one-frame range must remain video input");
+    return failures;
+#endif
+}
+
 int test_video_prepare(const Frontend& frontend) {
     ninfer::MessagePart video;
     video.kind              = ninfer::MessagePartKind::Media;
@@ -2829,6 +2873,7 @@ int main() {
     failures += test_multimodal_prompt_over_removed_32k_cap(frontend);
     failures += test_attention_pairs_are_diagnostic(frontend);
     failures += test_video_prepare(frontend);
+    failures += test_local_frame_image_prepare(frontend);
     failures += test_cross_round_stop(frontend);
     failures += test_same_token_stop_priority(frontend);
     failures += test_terminal_flush(frontend);

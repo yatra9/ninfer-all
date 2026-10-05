@@ -92,6 +92,19 @@ def main():
             assert link["content"][1]["type"] == "resource_link"
             assert "%3F%23%26.mp4?" in link["content"][1]["uri"]
             assert link["content"][1]["mimeType"] == "video/mp4"
+            for frame in (0, 7):
+                single = call("inspect_video", {"path": str(path), "instruction": "See image",
+                    "frame": frame, "scale": 2, "deinterlace": "off",
+                    "bbox": {"x": 0, "y": 0, "width": 32, "height": 24}})
+                assert not single["isError"]
+                assert f"?frame={frame}&" in single["content"][1]["uri"]
+                assert single["content"][1]["mimeType"] == "video/mp4"
+            for range_key in ("start_frame", "end_frame", "skip_frame"):
+                assert call("inspect_video", {"path": str(path), "instruction": "x",
+                    "frame": 0, range_key: 0})["isError"]
+            for invalid_frame in (-1, 1.5, True, 8, 2**64 - 1):
+                assert call("inspect_video", {"path": str(path), "instruction": "x",
+                    "frame": invalid_frame})["isError"]
             mkv = root / "native.mkv"
             subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-c", "copy", "-y", str(mkv)], check=True)
             assert call("inspect_video", {"path": str(mkv), "instruction": "color"})["content"][1]["mimeType"] == "video/mp4"

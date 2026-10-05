@@ -161,8 +161,13 @@ prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl
     check_preparation_control(control, "local video planning");
     std::shared_ptr<media::local_video::VideoSource> source;
     media::local_video::Options options;
-    options.start = input.start_frame;
-    options.end = input.end_frame;
+    if (input.frame && (*input.frame < 0 || input.start_frame != 0 || input.end_frame ||
+                        input.skip_frame != 0)) {
+        throw ProcessorError(ProcessorErrorKind::InvalidMedia,
+                             "frame must be nonnegative and cannot be combined with range controls");
+    }
+    options.start = input.frame.value_or(input.start_frame);
+    options.end = input.frame ? input.frame : input.end_frame;
     options.skip = input.skip_frame;
     if (input.crop) {
         options.crop = media::local_video::Rect{input.crop->x, input.crop->y, input.crop->width,
@@ -181,6 +186,7 @@ prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl
         video = source->plan(options);
         prompt = plan_local_video_prompt(video.width, video.height, video.selected_frames,
                                          maximum_total_tokens, maximum_chunk_tokens);
+        prompt.image = input.frame.has_value();
     } catch (const LocalVideoPlanError& error) {
         throw ProcessorError(error.kind() == LocalVideoPlanErrorKind::BudgetExceeded
                                  ? ProcessorErrorKind::BudgetExceeded

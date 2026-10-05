@@ -661,6 +661,8 @@ struct LocalVideoCrop {
 // validated; downstream preparation must not reinterpret the original URL.
 struct OwnedLocalVideo {
     std::filesystem::path path;
+    // A single source frame represented as an image, not a timestamped video.
+    std::optional<std::int64_t> frame;
     std::int64_t start_frame = 0;
     std::optional<std::int64_t> end_frame;
     std::int64_t skip_frame = 0;

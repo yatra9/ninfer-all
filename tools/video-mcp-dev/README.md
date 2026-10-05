@@ -56,6 +56,11 @@ inspect → native video inference, shared source/index reuse in debug logs, all
 tools while suspended, resume and the existing Responses endpoint. Its report is
 `/acceptance/http-report.json`. Debug paths and test credentials are fixture-only.
 
+It also verifies `frame=0/2/3` as image inputs (with crop and scale), red/blue answers,
+API rejection of missing frames and combined range controls, and single-frame MCP calls
+while suspended. For OpenCode single-frame acceptance, pass a prompt requiring
+`inspect_video` with `frame=2` and verify its unchanged URI reaches the next model request.
+
 ## OpenCode acceptance
 
 Use `run-opencode.ps1` with the user-selected executable and `opencode.example.json`.

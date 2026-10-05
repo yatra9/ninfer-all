@@ -69,3 +69,30 @@ frames 2–3. The second run reused the first run's source/index (`index_builds=
 passed again, including authentication, native inference and tools while suspended.
 Reports for both color runs and HTTP acceptance are saved under `.cache/video-mcp`.
 All v1 completion conditions now pass. Test servers were stopped after verification.
+
+## Single-frame image mode: passed (2026-10-06)
+
+The WSLC incremental build of ninfer-serve, the test bundle, MCP HTTP fixture and
+local-video payload test passed using the existing ninfer-all:dev build tree.
+All 11 affected CTest cases passed (22.77 seconds). The frontend regression compares
+frame-mode token IDs, token types, mRoPE positions and rope delta against ordinary
+image input exactly, and confirms an ordinary one-frame video stays video modality.
+The payload regression verifies exactly one selected source frame and repeated RGB
+pixels in the two temporal patch slots required by Qwen image encoding.
+
+Real HTTP/MCP acceptance with the selected Qwen3.8-27B model on RTX 3090 passed:
+frame 0 of mystery.mp4 was red; frames 2 and 3 were blue. These requests combined
+frame with bbox and scale. Explicit frame+start/end/skip, negative frame and missing
+frame requests returned HTTP 400. The existing range input, authentication,
+suspended CPU tools (including frame mode), resume and Responses checks also passed.
+
+The same previously patched OpenCode executable was used without modifications.
+It called inspect_video(frame=2), attached the returned video/mp4 resource link,
+and sent the exact ninfer-video:///videos/mystery.mp4?frame=2 URI as video_url in
+the next request from the same agent. It answered blue. check-opencode.py passed
+with one session, one inspect link and the matching URI. No OpenCode rebuild is needed.
+
+Evidence is retained in .cache/video-mcp/http-frame-report.json,
+opencode-frame-report.json, opencode-frame-events.jsonl, opencode-frame-run.log
+and frame-wire.jsonl. The acceptance container retains the server log and HTTP report.
+Test GPU server and observer were stopped after verification.

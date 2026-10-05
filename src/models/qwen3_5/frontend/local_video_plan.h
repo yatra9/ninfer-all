@@ -36,6 +36,7 @@ struct LocalVideoChunkPlan {
 // Immutable prompt geometry derived without decoding RGB frames. Frame timings remain in source
 // display order so execution can read only the ranges named by chunks.
 struct LocalVideoPromptPlan {
+    bool image = false;
     int width = 0;
     int height = 0;
     int grid_height = 0;

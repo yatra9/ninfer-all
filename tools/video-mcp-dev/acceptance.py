@@ -83,6 +83,26 @@ def main():
         assert status == 200, video
         report["native_video_answer"] = video["choices"][0]["message"]["content"]
         assert "red" in report["native_video_answer"].lower(), video
+        report["single_frame_images"] = []
+        for frame, color in ((0, "red"), (2, "blue"), (3, "blue")):
+            single = tool("inspect_video", {"path": "/videos/mystery.mp4", "instruction": "See this image",
+                "frame": frame, "bbox": {"x": 0, "y": 0, "width": 96, "height": 64}, "scale": 2})
+            single_uri = single["content"][1]["uri"]
+            assert f"?frame={frame}&" in single_uri
+            status, _, image = http("/v1/chat/completions", {"model": "qwen3.8-27b", "temperature": 0,
+                "max_tokens": 64, "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": "What color fills this image? Answer with one color word."},
+                    {"type": "video_url", "video_url": {"url": single_uri}}]}]})
+            assert status == 200, image
+            answer = image["choices"][0]["message"]["content"]
+            assert color in answer.lower(), image
+            report["single_frame_images"].append({"frame": frame, "uri": single_uri, "answer": answer})
+        for query in ("frame=0&start_frame=0", "frame=0&end_frame=0", "frame=0&skip_frame=0",
+                      "frame=-1", "frame=4"):
+            status, _, error = http("/v1/chat/completions", {"model": "qwen3.8-27b", "max_tokens": 8,
+                "messages": [{"role": "user", "content": [{"type": "video_url",
+                    "video_url": {"url": "ninfer-video:///videos/mystery.mp4?" + query}}]}]})
+            assert status == 400, (query, status, error)
         report["metadata_after_reader"] = tool("get_video_metadata", {"path": "/videos/red.mp4"})
         base = "/v1/models/qwen3.8-27b"
         status, _, suspended = http(base + "/suspend", {"auto_resume": False})
@@ -90,6 +110,7 @@ def main():
         report["suspended_cpu_metadata"] = tool("get_video_metadata", {"path": "/videos/red.mkv"})
         report["suspended_cpu_resolve"] = tool("resolve_video_time", {"path": "/videos/red.mkv", "time_seconds": 0.5})
         report["suspended_cpu_inspect"] = tool("inspect_video", {"path": "/videos/red.mkv", "instruction": "color"})
+        report["suspended_cpu_frame"] = tool("inspect_video", {"path": "/videos/red.mkv", "instruction": "See image", "frame": 0})
         assert http(base + "/residency")[2]["state"] == "suspended"
         status, _, resumed = http(base + "/resume", {})
         assert status == 200 and resumed["state"] == "ready", resumed

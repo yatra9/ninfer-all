@@ -248,3 +248,41 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - frames 2–3 は blue、frames 0–1 は red と正しく回答。両 run の `check-opencode.py` が1 agent session・1 inspect link・matching native video URIありで `complete=true`。後者の inspect 時点で同一 mystery source は index_builds=1 / index_reuses=1 / metadata_probes は増加せず、前 run reader の source/index を再利用。
 - SPEC §19 の全完了条件を満たした。残る実装・判断待ちはない。変更は検証記録と完了 status の更新のみで、以前通過した CPU tests の再実行は不要。
 - 成功 reports は host `.cache/video-mcp/{http-report,opencode-blue-report,opencode-red-report}.json`、blue events/runtime log は suffix blue を付けて保存、最新 events/log は red run。wire summary と container `/acceptance` の証拠も保持。検証用 observer / GPU server を停止し、model volume / development container は保持。
+
+### 追加実装チェックポイント: 単一フレーム画像モード（実装・検証中）
+
+- 追加要求: `ninfer-video:///videos/demo.mp4?frame=N` と `inspect_video(frame=N)`。0始まりの1枚をQwen3.8へ画像として入力し、start/end/skipとの同時指定を既定値でも拒否する。その他の既存空間加工オプションを許可する。
+- URI parser/builder、公開OwnedLocalVideo、serving acquisition、Qwen frontend/processor、lazy payload計画、MCP schema/validationを更新。画像用tokens/modality/位置情報を使用し、同じRGBを2つのtemporal patch slotに複製。従来の1枚rangeは動画入力のまま。
+- SPEC_VIDEO.md §5.0、SPEC_VIDEO_MCP.md §9.2/9.3、serving guide、PowerShell helperに反映。MCPは互換MIME video/mp4を保持し、既存OpenCodeにURIをそのまま渡す方針。
+- WSLCの既存ninfer-all:dev / ninfer-all-dev / baseline build treeで増分build中。公開入力型への変更が参照先C++/CUDAの再コンパイルを発生させる。GPUは開始時0 MiB。CPU/frontend/API/MCPテストと指定exeによる単一フレームE2Eを追加中。
+- 実施済み: PowerShell helper DryRunでframe=0&scale=2生成とFrame+StartFrame=0拒否を確認。
+- 次: build完了後に関連CTest、実モデルのimage/range回帰、OpenCode同一agentでframe URI forwardingを確認。結果を本checkpointへ追記してcoherent unitをcommit。現段階でユーザー判断待ちはない。
+
+### 再開用メモ: ユーザー指定でビルド監視を停止
+
+- ユーザーが「buildはかなりかかるので、やることがなくなったら止め、半日後に再度呼ぶ」と指示。ビルド自体は中断せず、このチャットの作業・監視を停止する。未検証のため本追加単位はまだcommitしない。
+- 進行中のbuild command: `wslc exec ninfer-all-dev sh -c 'cmake --build "$(cat /build/video-mcp-build-dir)" --target ninfer-serve ninfer_tests ninfer_video_mcp_http_fixture -j'`。このチャットのexec session_id=69688。再開時にsession出力が取得できなければ、同じcommandを実行する前にcontainer内のninja/nvccプロセスが終了していることを確認する。
+- buildは公開types.h変更による250ステップ。最後に確認した出力は19/250、CUDA cicc/ptxasが実行中。WSLC RAM23GiB、swap未使用、GPU0MiB。baseline build treeは `/build/cdce3b3aef6da28fdc9d6a913a78b062d76df75a1ffe09d47dde128f92923bc3`。
+- 初回source sync/build開始後に `tests/models/qwen3_5/test_frontend.cpp` の画像modality/token/位置情報一致テストを追加した。現在のbuild終了後、prepare-build.shで最新sourceを再同期し、ninfer-serve / ninfer_tests / ninfer_video_mcp_http_fixture / ninfer_qwen3_5_local_video_payload_testを増分buildすること。fixtureは64x64 PPMをlocal sourceとして使用し、通常画像とtoken_ids/positions/token_types/rope_deltaが一致することを検証する。
+- 独立CPU検証済み: 最新host sourceからg++で `/tmp/video-frame-url-test` をbuild/runし成功。frame=0/100、spatial option roundtrip、負数/小数/overflow、range3引数の明示既定値併用と引数順序入替の拒否を確認。PowerShell helper DryRun/排他拒否も成功。
+- OpenCode sourceをread-onlyで確認: session/tools.tsのresource_link処理はninfer-video scheme + video MIMEをそのままfile.urlへ、packages/llm/src/protocols/openai-chat.tsはその文字列をvideo_url.urlへ渡す。frame queryの制限なし。exe修正不要の設計だが実exe検証は未実施。
+- 次の検証: 関連CTest（frontend、local_video_payload、local_video_url、video_mcp_http、video_source_serviceと既存OpenAI/Anthropic/HTTP回帰）。その後README手順で既存acceptance/observer containerを起動し、最新ninfer-serveをtransferしてacceptance.pyを実行。追加したframe0=red/2=blue/3=blue（crop+scale）、併用/負数/範囲外API400、suspend中frame toolを確認する。
+- 指定exeのOpenCode E2E: `.cache/video-mcp/opencode-observer.json` を使いrun-opencode.ps1へinspect_video(frame=2)を要求するpromptを渡す。wire/eventsをcheck-opencode.pyで照合し、同一agentの後続video_urlにframe=2 URIとblue回答を確認。完了後GPU server/observer停止、結果をACCEPTANCE.mdと本PLANに記録しdiff/checksを確認してcommit。
+- 実model artifact・volume・container・portは前のv1完了checkpointのまま。GPU acceptanceとobserverは現時点で停止中。ユーザー判断待ちや既知の実装問題はないが、新機能の関連build/CTest/実model/実exe検証は未完了。
+
+### 停止前の並行検証結果
+
+- 主buildに触れず `/tmp/video-frame-cpu` へ最新host sourceのMCP handler・URI builder・HTTP fixtureをCPU-onlyで別途compile/link。既存の変更していないtransport/media/spdlog librariesを利用し、最新embedded schemaで実HTTP regressionを実行成功（video MCP HTTP contracts passed）。frame=0/7 + bbox/scale/deinterlace、明示既定値range引数の併用拒否、負数/小数/bool/overflow/範囲外の拒否、既存HTTP/session/cancellation回帰を確認。
+- frontend画像一致テストに使う64x64 PPMを既存production VideoSourceでprobe/planし、source frame0のみ・64x64 geometryが成立することを確認。fixtureの成立は確認済み、frontendのtokens/positions一致そのものは主build後のCTestで確認する。
+- Python3.12.3（既存WSLC fixture interpreterの確認済み例外）でrun_video_mcp_http_test.pyとacceptance.pyのsyntaxを確認。git diff --checkも成功。独立検証helperはignored `.cache/video-mcp/frame-cpu-check.py`、成果物はcontainer `/tmp/video-frame-cpu` にあり、repository commit対象には含めない。
+- 主buildは中断していない。初回build後の最新source再同期・関連target build/CTest・実model・OpenCode検証・結果記録・commitは依然として次回作業。ここでユーザー指定に従い停止する。
+
+### 追加実装チェックポイント: 単一フレーム画像モード完了
+
+- ユーザーの再開指示に従い作業を再開。継続buildは250/250成功。最新sourceを再同期し、ninfer-serve / ninfer_tests / ninfer_video_mcp_http_fixture / ninfer_qwen3_5_local_video_payload_testの増分buildも成功（追加C++ testのみ）。WSLC CUDA13.1 / sm86 / ninfer-all:dev /既存baseline treeを使用。
+- 関連CTest 11/11成功（22.77秒）: source service、URI、OpenAI/Anthropic schema、Responses store、MCP proxy、HTTP error/transport、MCP HTTP、Qwen frontend、local-video payload。画像modeのtoken_ids/token_types/positions/rope_deltaが通常imageと完全一致、temporal=1、timestamp無しを確認。従来の1枚videoはvideo modalityのまま。payloadはsource frame3のみを選択し同じRGBのtemporal複製を確認。
+- 指定実model / RTX3090でacceptance.py成功。frame0=red、frame2/3=blue（bbox+scale併用）。併用start/end/skipの明示既定値、負数、存在しないframeがHTTP400。既存range入力、auth、model suspended中3 toolsおよびframe mode、resume、Responses回帰も成功。
+- 指定OpenCode exeを変更せず通常native実行。inspect_video(frame=2)→resource_link→file attachment→同一agentの次のvideo_urlに完全一致するframe URIを確認しblue回答。check-opencode.py complete=true、session=ses_ef1c99f19ffeJgC2qPbfwk0kwU、call=call_bdcc37db172d5b5b。OpenCode修正・再build不要を実証。
+- SPEC_VIDEO.md §5.0と型、SPEC_VIDEO_MCP.md §9.2/9.3、schema/tool説明、serving guide、PowerShell helper -Frame、acceptance再実行手順・記録を更新。image modeでも互換MIME video/mp4を保持し、NInferでimage tokens/位置情報へ変換する。
+- 結果はtools/video-mcp-dev/ACCEPTANCE.md、raw evidenceはhost .cache/video-mcpのhttp-frame-report / opencode-frame-report / opencode-frame-events / opencode-frame-run / frame-wireとacceptance container /acceptanceに保持。検証用GPU server/observer/一時build HTTP配信を停止。GPU0MiBを確認。
+- 完全diff reviewとgit diff --checkを実施。build id unknownはrsync checkoutにgit metadataがない既知のbuild表示制限のみ。要求範囲の未検証事項・既知の不具合・判断待ちはない。単一のcoherent feature unitとしてcommitする。次の実装作業なし。

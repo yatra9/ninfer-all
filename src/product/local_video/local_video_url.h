@@ -30,6 +30,7 @@ struct CropRect {
 
 struct LocalVideoSpec {
     std::filesystem::path path;
+    std::optional<std::int64_t> frame;
     std::int64_t start_frame = 0;
     std::optional<std::int64_t> end_frame;
     std::int64_t skip_frame = 0;

@@ -813,6 +813,14 @@ selected frame and skips the next N. `bbox=x,y,width,height` crops before `scale
 duplicate or unknown query fields are rejected, and paths must be percent-encoded when they contain
 reserved URL characters.
 
+Use `ninfer-video:///videos/example.mp4?frame=100` to view one exact 0-based source frame
+as an image. `frame` cannot be combined with `start_frame`, `end_frame`, or `skip_frame`,
+even when explicitly set to defaults. Crop, scale and deinterlace remain available.
+The API content stays `video_url`; NInfer produces image tokens and image position information
+for Qwen3.8, without video timestamps. The same decoded RGB image fills both temporal patch slots.
+Existing geometry, local-video token and live-memory limits still apply; missing frames are errors.
+The PowerShell helper supports this mode with `-Frame 100`.
+
 The repository includes a PowerShell client for manual tests. It builds the URL, sends a
 non-streaming Chat Completions request, and prints the answer, optional reasoning, finish reason,
 and token usage:
@@ -1821,6 +1829,11 @@ for the supplied OpenCode native-video patch, including MKV sources; it serves n
 MP4 download and does not transcode the source. FFmpeg detects the actual source
 format. OpenCode must use the supplied patched executable and the
 `opencode-ninfer` provider with NInfer's `/v1` base URL.
+
+`inspect_video` also accepts `frame=100`: you (the AI) yourself can see that source frame's
+image in the next model call. This argument excludes all three range/sampling arguments;
+spatial options remain available. Its resource link keeps the `video/mp4` compatibility tag.
+The existing patched OpenCode executable forwards the URI unchanged and needs no modification.
 
 Tools use CPU-only video processing, including while the model is suspended.
 Four concurrent tool calls, a 120-second checkpoint deadline, two million indexed

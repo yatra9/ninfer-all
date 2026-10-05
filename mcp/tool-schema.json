@@ -3,7 +3,7 @@
     {
       "name": "inspect_video",
       "title": "Inspect video",
-      "description": "Visually inspect selected source frames from a local video through NInfer native video input. The selected frames are sent back to the same Qwen/NInfer agent as multimodal visual input. Selection uses 0-based source frame numbers. Use start_frame/end_frame for the range, skip_frame for temporal sampling, bbox for cropping, scale for magnification/reduction, and deinterlace when needed.",
+      "description": "Visually inspect a local video through NInfer native visual input. With frame=N, you (the AI) yourself can see the image of that exact source frame, sent back to the same agent as image input. Otherwise selected frames are sent as video input. Selection uses 0-based source frame numbers. frame cannot be combined with start_frame, end_frame or skip_frame. Use start_frame/end_frame for a range, skip_frame for temporal sampling, bbox for cropping, scale for magnification/reduction, and deinterlace when needed. Spatial options can also be used with frame.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -17,6 +17,11 @@
             "type": "string",
             "minLength": 1,
             "description": "What to visually inspect or determine from the selected video frames."
+          },
+          "frame": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "See one exact source frame as an image yourself (0-based index). Mutually exclusive with start_frame, end_frame and skip_frame, including their default values. Other options may be combined."
           },
           "start_frame": {
             "type": "integer",

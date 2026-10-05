@@ -313,6 +313,22 @@ void run(const std::filesystem::path& path) {
 
     auto repeated = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,
                                                    payload_account);
+    auto single_input = input;
+    single_input.frame = 3;
+    auto single = fi::prepare_local_video_input(single_input, {}, 24, 12, source_cache,
+                                               payload_account);
+    expect(single.prompt.image && single.prompt.selected_frames.size() == 1 &&
+               single.prompt.selected_frames.front().source_index == 3 &&
+               single.prompt.chunks.size() == 1 && single.prompt.chunks.front().temporal_count == 1,
+           "single-frame mode selects exactly the requested image");
+    auto single_frames = decode_reference(single);
+    fi::LocalVideoPayloadReader single_reader(single);
+    auto single_payload = single_reader.read_chunk(0);
+    const auto image_expected = expected_payload(single, single_frames);
+    expect(std::equal(single_payload->span().begin(), single_payload->span().end(),
+                      image_expected.begin(), image_expected.end()),
+           "single-frame image repeats its pixels in both temporal patch slots");
+    single_payload.reset();
     expect(repeated.source == prepared.source,
            "a later request reuses the cached source for the unchanged path");
     expect(repeated.source->source_stats().index_builds == 1 &&

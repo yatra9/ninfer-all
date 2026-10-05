@@ -540,6 +540,17 @@ duration が完全に信頼できない場合でも、index構築後に最終 fr
 
 ### 9.2 URI 生成
 
+単一フレームを見る場合は `inspect_video(path="/videos/demo.mp4", instruction="Read the sign", frame=100)`
+を指定する。`frame` は0始まりの非負整数で、`start_frame` / `end_frame` / `skip_frame` と同時指定不可
+（それらの既定値を明示しても不可）。bbox、scale、deinterlace等の他のオプションは併用できる。
+ツール説明には「あなた（AI）自身がそのフレームの画像を見られる」ことを明記する。
+生成するURIは `ninfer-video:///videos/demo.mp4?frame=100`。NInferはこれをQwen3.8の画像入力に変換し、
+timestamp付き動画promptではなくimage tokens / image modalityを使用する。詳細は `SPEC_VIDEO.md` §5.0。
+
+返却形式は既存と同じtext + resource_link、互換MIME `video/mp4`。
+このMIMEはOpenCodeの既存native-video attachment routeを選択するタグであり、画像モードでも変更しない。
+OpenCodeの既存patchはURIをそのまま後続 `video_url` に渡すため、client側に `frame` parserや修正を追加する必要はない。
+
 `path` 入力は **NInfer から見える動画ファイルの絶対パス** のみとする。Linux/WSLC では例として `/videos/demo.mp4` を指定する。`ninfer-video://`、`file://` 等の URI および相対パスは受け付けない。
 
 `path` の `?` 以降に query オプションを付ける方式はサポートしない。frame range、sampling、crop、scale、deinterlace は各 tool 引数で指定する。入力 path を URI として解析したり、query を取り出したりしない。ファイル名そのものに含まれる予約文字は出力 URI の生成時に escape する。
@@ -584,6 +595,8 @@ ninfer-video:///work/video.mp4?start_frame=100&end_frame=200&skip_frame=2&scale=
 
 - path が絶対パスであること（URI/相対パスを拒否）、path exists / readable、および既存 local-media-root 認可
 - `start_frame <= end_frame`
+- `frame` が非負整数で、range / sampling引数との同時指定がないこと
+- `frame` が exact frame count 既知なら範囲内（未知なら後続NInfer readerが厳密に検証）
 - start/end が exact frame count 既知なら範囲内
 - bbox が source dimensions 内
 - scale > 0

@@ -280,8 +280,10 @@ std::vector<fi::ChatMessage> convert_messages(std::vector<ChatMessage> messages)
                             "frontend local video input has inconsistent media storage");
                     }
                     fi::MediaData media;
+                    const bool image = part.media.local_video->frame.has_value();
                     media.local_video = std::move(part.media.local_video);
-                    target.parts.push_back(fi::ChatPart::video(std::move(media)));
+                    target.parts.push_back(image ? fi::ChatPart::image(std::move(media))
+                                                 : fi::ChatPart::video(std::move(media)));
                     break;
                 }
                 if (part.media.bytes.empty()) {

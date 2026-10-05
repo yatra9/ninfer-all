@@ -14,6 +14,9 @@ OpenAI-compatible API base, with or without a trailing /v1. Defaults to the loca
 .PARAMETER Bbox
 Optional crop in x,y,width,height form. Quote this value in PowerShell because it contains commas.
 
+.PARAMETER Frame
+One exact 0-based source frame, sent to Qwen as an image. Cannot be combined with range controls.
+
 .PARAMETER DryRun
 Build and display the request without calling the API.
 
@@ -57,6 +60,7 @@ param(
     [AllowEmptyString()]
     [string]$ApiKey = $env:NINFER_API_KEY,
 
+    [long]$Frame,
     [long]$StartFrame,
     [long]$EndFrame,
     [long]$SkipFrame,
@@ -88,6 +92,12 @@ function Assert-Nonnegative([string]$Name, [long]$Value) {
     }
 }
 
+if ($PSBoundParameters.ContainsKey('Frame')) {
+    Assert-Nonnegative 'Frame' $Frame
+    foreach ($range in @('StartFrame', 'EndFrame', 'SkipFrame')) {
+        if ($PSBoundParameters.ContainsKey($range)) { throw 'Frame cannot be combined with StartFrame, EndFrame or SkipFrame.' }
+    }
+}
 if ($PSBoundParameters.ContainsKey('StartFrame')) { Assert-Nonnegative 'StartFrame' $StartFrame }
 if ($PSBoundParameters.ContainsKey('EndFrame')) { Assert-Nonnegative 'EndFrame' $EndFrame }
 if ($PSBoundParameters.ContainsKey('SkipFrame')) { Assert-Nonnegative 'SkipFrame' $SkipFrame }
@@ -139,6 +149,7 @@ if ($PSBoundParameters.ContainsKey('Bbox')) {
 # the ninfer-video parser. The server decodes the path exactly once before authorization.
 $encodedPath = [Uri]::EscapeDataString($VideoPath).Replace('%2F', '/')
 $query = [System.Collections.Generic.List[string]]::new()
+if ($PSBoundParameters.ContainsKey('Frame')) { $query.Add("frame=$Frame") }
 if ($PSBoundParameters.ContainsKey('StartFrame')) { $query.Add("start_frame=$StartFrame") }
 if ($PSBoundParameters.ContainsKey('EndFrame')) { $query.Add("end_frame=$EndFrame") }
 if ($PSBoundParameters.ContainsKey('SkipFrame')) { $query.Add("skip_frame=$SkipFrame") }
