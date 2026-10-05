@@ -319,3 +319,9 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - MPEG-PS source-service testとMP4実HTTP testで、0.02/0.1秒の中間点・nextafter直前/直後を検証。既存の非ゼロPTS原点、CFR/VFR、reader/cache/session/cancelの回帰も含め、WSLC ninfer-all:dev / ninfer-all-devの増分build（ninfer-serve、source-service、MCP HTTP fixture）成功、関連CTest 2/2成功（19.29秒）。CUDA kernelsの再buildなし。
 - SPEC_VIDEO_MCP.md §8.4へdouble精度での境界規則を明記。完全diff reviewとgit diff --check成功。GPU実model/OpenCode E2Eは時刻解決のCPU経路修正のため再実行していない。build unknownはrsync sourceの既知の表示制限。
 - 再監査の指摘1件を解消。判断待ち・残る実装作業なし。
+
+### Docker image既定CMD: local media root
+
+- Dockerfileの既定ninfer-serve CMDへ --local-media-root /videos を追加。動画ディレクトリを/videosへmountして起動するとnative動画入力とMCP動画toolsが利用できる。
+- CMDのJSON配列をPowerShellでparseし、引数と値を確認。git diff --checkと変更diff reviewを実施。image rebuild/起動検証は今回の既定引数追加では実行していない。
+- 次の作業なし。利用時は/videosへの動画ディレクトリmountが必要。
