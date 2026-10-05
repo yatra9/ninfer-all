@@ -292,3 +292,9 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - cached reopen時にstreamが未発見ならFFmpegのstream discoveryへfallbackし、probe packetsを保持。通常のheader-based containerは従来通りcached parametersを再利用。metadata_probesはsource metadata作成回数を表し、reopenでのformat discoveryは含まない。
 - MPEG2/MPEG-PS fixtureを追加しmetadata→time resolution→readerを検証。WSLC増分buildとvideo_source_service CTest成功。
 - 次: frontend acquireのcancellation伝播、geometry統一、session expirationを修正。
+
+### 監査修正2: frontend metadata待機の中断
+
+- request checkpoint付きOptionsを専用cacheと共有cache双方のacquireへ渡した。初回probeおよびprobe mutex待機もキャンセル/期限の対象。
+- 別requestのprobeをmutex保持状態で止め、frontend waiterがcancel/deadline双方で解除前に終了する回帰テストを追加。cache再利用も確認。WSLC buildとlocal_video_payload CTest成功。
+- 次: geometry統一とsession expiration。GPU/実OpenCode再検証は本修正のCPU待機経路には不要。

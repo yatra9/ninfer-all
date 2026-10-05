@@ -181,8 +181,8 @@ prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl
     media::local_video::VideoPlan video;
     LocalVideoPromptPlan prompt;
     try {
-        source = source_cache ? source_cache->acquire(input.path)
-                              : media::local_video::shared_video_source_service()->acquire(input.path);
+        source = source_cache ? source_cache->acquire(input.path, options)
+                              : media::local_video::shared_video_source_service()->acquire(input.path, options);
         video = source->plan(options);
         prompt = plan_local_video_prompt(video.width, video.height, video.selected_frames,
                                          maximum_total_tokens, maximum_chunk_tokens);

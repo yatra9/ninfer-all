@@ -71,6 +71,37 @@ void run(const std::filesystem::path& path) {
     ninfer::OwnedLocalVideo input;
     input.path = path;
     input.deinterlace = ninfer::LocalVideoDeinterlace::Off;
+    for (bool use_deadline : {false, true}) {
+        auto cache = std::make_shared<lv::VideoSourceService>(1);
+        std::promise<void> probe_locked, release_probe;
+        auto release = release_probe.get_future().share();
+        unsigned checkpoints = 0;
+        lv::Options held_options;
+        held_options.checkpoint = [&] {
+            if (++checkpoints == 2) { probe_locked.set_value(); release.wait(); }
+        };
+        auto held = std::async(std::launch::async, [&] { return cache->acquire(path, held_options); });
+        probe_locked.get_future().wait();
+        std::atomic<bool> cancelled{false};
+        ninfer::PreparationControl control{
+            .deadline = use_deadline ? std::chrono::steady_clock::now() + std::chrono::milliseconds(50)
+                                     : std::chrono::steady_clock::time_point{},
+            .cancellation = ninfer::CancellationView{[&] { return cancelled.load(); }}
+        };
+        auto pending = std::async(std::launch::async, [&] {
+            try { (void)fi::prepare_local_video_input(input, control, 24, 12, cache); }
+            catch (const ninfer::RequestError&) { return true; }
+            return false;
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        if (!use_deadline) cancelled = true;
+        expect(pending.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready,
+               "frontend acquisition honours cancellation/deadline while metadata probe is held");
+        release_probe.set_value();
+        (void)held.get();
+        expect(pending.get(), "frontend acquisition reports interrupted preparation");
+        expect(bool(cache->acquire(path)), "source cache remains usable after interrupted waiter");
+    }
     auto contended_source = std::make_shared<lv::VideoSource>(path);
     std::promise<void> index_started;
     std::promise<void> release_index;
