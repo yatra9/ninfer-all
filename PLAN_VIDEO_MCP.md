@@ -312,3 +312,10 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - WSLC ninfer-all:dev / ninfer-all-devでninfer-serve、ninfer_tests、MCP HTTP fixture、source service、payload targetを増分build成功。関連CTest 12/12成功（21.49秒）。完全diff reviewとgit diff --check成功。
 - GPU/実model/OpenCode E2Eは再実行していない。修正したdemux/cache待機/geometry/HTTP session経路はCPU回帰で検証し、既存frontendの画像/動画tokens一致も成功。build unknown表示はrsync sourceにgit metadataがない既知の制限。
 - 監査4件の修正完了。判断待ち・既知の未修正事項なし。次の実装作業なし。再検証時は本章のtargetsと関連CTestを使用する。
+
+### 再監査修正: nearest frameの小数中間点
+
+- 25fps動画の0.02秒/0.1秒で、秒→絶対PTS変換の丸め誤差により後frameが選ばれる問題を修正。検索と中間点計算をsource frame 0からの相対時刻で行い、中間点をAPIのdouble精度へ丸めて前frame側の境界にする。固定epsilonは使用せず、直後の表現可能なdoubleは後frameを選ぶ。
+- MPEG-PS source-service testとMP4実HTTP testで、0.02/0.1秒の中間点・nextafter直前/直後を検証。既存の非ゼロPTS原点、CFR/VFR、reader/cache/session/cancelの回帰も含め、WSLC ninfer-all:dev / ninfer-all-devの増分build（ninfer-serve、source-service、MCP HTTP fixture）成功、関連CTest 2/2成功（19.29秒）。CUDA kernelsの再buildなし。
+- SPEC_VIDEO_MCP.md §8.4へdouble精度での境界規則を明記。完全diff reviewとgit diff --check成功。GPU実model/OpenCode E2Eは時刻解決のCPU経路修正のため再実行していない。build unknownはrsync sourceの既知の表示制限。
+- 再監査の指摘1件を解消。判断待ち・残る実装作業なし。

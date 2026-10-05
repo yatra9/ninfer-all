@@ -1,5 +1,6 @@
 """CPU-only real HTTP contracts against the production MCP route module."""
 import json
+import math
 import pathlib
 import subprocess
 import sys
@@ -84,6 +85,18 @@ def main():
             resolved = call("resolve_video_time", {"path": str(path), "time_seconds": 0.125})
             assert not resolved["isError"]
             assert resolved["structuredContent"]["nearest_frame_number"] == 0
+            decimal_path = root / "decimal-midpoints.mp4"
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                            "color=red:size=64x48:rate=25:duration=1", "-c:v", "libx264",
+                            "-y", str(decimal_path)], check=True)
+            for midpoint, earlier in ((0.02, 0), (0.1, 2)):
+                for target, expected_frame in ((midpoint, earlier),
+                        (math.nextafter(midpoint, 0.0), earlier),
+                        (math.nextafter(midpoint, math.inf), earlier + 1)):
+                    response = call("resolve_video_time", {"path": str(decimal_path),
+                        "time_seconds": target, "radius_frames": 0})
+                    assert not response["isError"]
+                    assert response["structuredContent"]["nearest_frame_number"] == expected_frame
             assert call("get_video_metadata", {"path": str(path)})["structuredContent"]["frame_count"] == 8
             link = call("inspect_video", {"path": str(path), "instruction": "Identify color",
                 "start_frame": 1, "end_frame": 4, "skip_frame": 1,

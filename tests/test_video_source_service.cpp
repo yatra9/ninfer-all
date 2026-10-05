@@ -5,6 +5,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <limits>
 
 using namespace ninfer::media::local_video;
 static void expect(bool ok,const char* message) { if (!ok) throw std::runtime_error(message); }
@@ -47,6 +48,18 @@ int main(int argc,char** argv) {
             expect(out,"time after final PTS accepted");
             if (fixture.value("tie",false))
                 expect(source->resolve_time(0.125,0).nearest.source_index==0,"tie did not select earlier frame");
+            if (path.extension()==".mpeg") {
+                for (const auto [midpoint, earlier] :
+                     {std::pair{0.02, 0}, std::pair{0.1, 2}}) {
+                    expect(source->resolve_time(midpoint,0).nearest.source_index==earlier,
+                           "decimal midpoint did not select earlier frame");
+                    expect(source->resolve_time(std::nextafter(midpoint,0.0),0).nearest.source_index==earlier,
+                           "time immediately before midpoint selected later frame");
+                    expect(source->resolve_time(std::nextafter(midpoint,std::numeric_limits<double>::infinity()),0)
+                               .nearest.source_index==earlier+1,
+                           "time immediately after midpoint selected earlier frame");
+                }
+            }
             Options options; options.start=1; options.end=2; options.deinterlace=Deinterlace::Off;
             auto reader=source->create_reader(options);
             auto chunk=reader.read_chunk(3);

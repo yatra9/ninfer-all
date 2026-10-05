@@ -721,12 +721,20 @@ TimeResolution VideoSource::resolve_time(double seconds,int radius,const Options
     };
     if (seconds>double(timestamp(index.size()-1)))
         throw Error(ErrorKind::InvalidInput,"video_time_out_of_range: time exceeds last frame timestamp");
-    const long double target=static_cast<long double>(seconds)*impl_->metadata.time_base_den/
-                             impl_->metadata.time_base_num+origin;
-    auto it=std::lower_bound(index.begin(),index.end(),target,
-                            [](const Timing& value,long double pts){return value.pts<pts;});
+    auto it=std::lower_bound(index.begin(),index.end(),static_cast<long double>(seconds),
+        [&](const Timing& value,long double target) {
+            return (static_cast<long double>(value.pts)-origin)*
+                   impl_->metadata.time_base_num/impl_->metadata.time_base_den<target;
+        });
     std::size_t nearest=it==index.end()?index.size()-1:std::size_t(it-index.begin());
-    if (nearest>0 && target-index[nearest-1].pts<=index[nearest].pts-target) --nearest;
+    if (nearest>0) {
+        // Round the exact midpoint to the API's double precision. This recognizes
+        // decimal midpoint inputs without widening the tie to adjacent doubles,
+        // and keeps a large absolute PTS origin out of the distance comparison.
+        const auto earlier=timestamp(nearest-1);
+        const double midpoint=static_cast<double>(earlier+(timestamp(nearest)-earlier)/2);
+        if (seconds<=midpoint) --nearest;
+    }
     const auto timing=[&](std::size_t i) {
         return FrameTiming{static_cast<std::int64_t>(i),index[i].pts,double(timestamp(i))};
     };
