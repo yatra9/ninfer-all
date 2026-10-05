@@ -873,7 +873,7 @@ EncodedChat encode_rendered_chat(const Tokenizer& tokenizer, const RenderedChat&
 
 Processor::Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& chat_template,
                      ProcessorOptions options, std::shared_ptr<MediaPreprocessCache> media_cache,
-                     std::shared_ptr<LocalVideoSourceCache> local_video_cache)
+                     std::shared_ptr<media::local_video::VideoSourceService> local_video_cache)
     : tokenizer_(tokenizer), chat_template_(chat_template), options_(std::move(options)),
       media_cache_(std::move(media_cache)), local_video_cache_(std::move(local_video_cache)) {
     if (options_.max_encoded_media_bytes == 0 || options_.max_decoded_pixels == 0 ||

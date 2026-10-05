@@ -716,7 +716,9 @@ public:
             media_cache = std::make_shared<fi::MediaPreprocessCache>(
                 options.media_cache_bytes, options.media_live_bytes,
                 options.media_preprocess_threads, static_cast<std::size_t>(minimum_live));
-            local_video_cache = std::make_shared<fi::LocalVideoSourceCache>();
+#ifndef _WIN32
+            local_video_cache = media::local_video::shared_video_source_service();
+#endif
         }
         if (!tokenizer || resources.public_token_count != tokenizer->vocab_size()) {
             throw std::invalid_argument(
@@ -779,7 +781,7 @@ public:
     std::shared_ptr<const fi::Tokenizer> tokenizer;
     fi::ProcessorOptions processor;
     std::shared_ptr<fi::MediaPreprocessCache> media_cache;
-    std::shared_ptr<fi::LocalVideoSourceCache> local_video_cache;
+    std::shared_ptr<media::local_video::VideoSourceService> local_video_cache;
     StopPolicy defaults;
     ModelSamplingDefaults sampling;
     std::shared_ptr<const std::vector<TokenId>> thinking_control_tokens;

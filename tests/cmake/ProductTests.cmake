@@ -3,6 +3,14 @@ ninfer_add_test(ninfer_media_decode_test
   LIBRARIES ninfer_media_decode)
 
 if(NOT WIN32)
+  add_executable(ninfer_video_source_service_test
+    "${CMAKE_CURRENT_LIST_DIR}/../test_video_source_service.cpp")
+  ninfer_test_includes(ninfer_video_source_service_test)
+  target_link_libraries(ninfer_video_source_service_test PRIVATE ninfer_local_video ninfer::json)
+  add_test(NAME ninfer_video_source_service_test
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_LIST_DIR}/../run_video_source_service_test.py"
+      "$<TARGET_FILE:ninfer_video_source_service_test>")
   ninfer_add_test(ninfer_local_video_url_test
     SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_local_video_url.cpp"
     LIBRARIES ninfer_local_video_url)

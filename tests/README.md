@@ -7,6 +7,12 @@ benchmark-report, and external protocol behavior. Repository verification princi
 
 ## Organization
 
+The Linux CPU-only `ninfer_video_source_service_test` generates CFR/VFR, audio,
+interlaced and nonzero-start fixtures with FFmpeg, then checks frame mappings
+against ffprobe presentation timestamps, cache reuse, file invalidation and retry.
+Run it together with `ninfer_qwen3_5_local_video_payload_test` after changing the
+shared video service. Neither test loads a model or uses CUDA execution.
+
 - `artifact/` — v3 framing, directory/binding records, codecs, sharding, selected-object
   materialization and Python-writer/C++-reader interoperability;
 - `convert/` — source interpretation, Qwen logical mapping, recipe overrides/sharing, optional

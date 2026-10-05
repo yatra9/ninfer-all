@@ -3,11 +3,11 @@
 #include "models/qwen3_5/frontend/local_video_plan.h"
 
 #include <ninfer/types.h>
+#include "media/local_video/video_source_service.h"
 
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <mutex>
 #include <vector>
 
 namespace ninfer::models::qwen3_5 {
@@ -17,24 +17,6 @@ struct PreparedMediaPayload;
 namespace ninfer::models::qwen3_5::frontend {
 class MediaPreprocessCache;
 class MediaPayloadReservation;
-
-// Process-wide frontend cache for immutable local-video sources. Entries are fingerprinted by
-// size and modification time; replacing a file publishes a new source while active requests keep
-// their old source alive long enough to fail its unchanged check safely.
-class LocalVideoSourceCache {
-public:
-    explicit LocalVideoSourceCache(std::size_t maximum_entries = 8);
-    ~LocalVideoSourceCache();
-    [[nodiscard]] std::shared_ptr<media::local_video::VideoSource>
-    acquire(const std::filesystem::path& path);
-
-private:
-    struct Entry;
-    std::size_t maximum_entries_;
-    std::uint64_t clock_ = 0;
-    std::mutex mutex_;
-    std::vector<Entry> entries_;
-};
 
 struct PreparedLocalVideoInput {
     std::shared_ptr<media::local_video::VideoSource> source;
@@ -73,7 +55,7 @@ private:
 prepare_local_video_input(const OwnedLocalVideo& input, const PreparationControl& control,
                           std::uint64_t maximum_total_tokens,
                           std::uint64_t maximum_chunk_tokens,
-                          const std::shared_ptr<LocalVideoSourceCache>& source_cache = {},
+                          const std::shared_ptr<media::local_video::VideoSourceService>& source_cache = {},
                           const std::shared_ptr<MediaPreprocessCache>& payload_account = {});
 
 } // namespace ninfer::models::qwen3_5::frontend

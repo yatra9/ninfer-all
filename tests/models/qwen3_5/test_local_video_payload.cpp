@@ -144,7 +144,7 @@ void run(const std::filesystem::path& path) {
     expect(reused_scan_is_budget,
            "a reused index preserves the per-request scan-frame limit");
 
-    auto cancelled_source_cache = std::make_shared<fi::LocalVideoSourceCache>(1);
+    auto cancelled_source_cache = std::make_shared<lv::VideoSourceService>(1);
     std::atomic<unsigned> planning_checkpoints{0};
     bool planning_cancelled = false;
     try {
@@ -172,7 +172,7 @@ void run(const std::filesystem::path& path) {
         pixels_are_budget = error.kind() == fi::ProcessorErrorKind::BudgetExceeded;
     }
     expect(pixels_are_budget, "local decoded-pixel limit is classified as a media budget");
-    auto source_cache = std::make_shared<fi::LocalVideoSourceCache>(2);
+    auto source_cache = std::make_shared<lv::VideoSourceService>(2);
     auto payload_account = std::make_shared<fi::MediaPreprocessCache>(0, 16 * 1024 * 1024, 1,
                                                                       16 * 1024 * 1024);
     auto prepared = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,

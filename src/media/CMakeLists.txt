@@ -23,6 +23,7 @@ target_link_libraries(ninfer_media_decode PRIVATE ${NINFER_FFMPEG_TARGET})
 if(NOT WIN32)
   add_library(ninfer_local_video STATIC
     local_video/video_pipeline.cpp
+    local_video/video_source_service.cpp
   )
   ninfer_internal_includes(ninfer_local_video)
   target_link_libraries(ninfer_local_video PRIVATE ${NINFER_FFMPEG_TARGET})

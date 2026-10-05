@@ -41,9 +41,13 @@ struct Info {
     int width = 0, height = 0, stream_index = 0;
     int time_base_num = 0, time_base_den = 1;
     int fps_num = 0, fps_den = 1;
+    int average_fps_num = 0, average_fps_den = 1;
+    int nominal_fps_num = 0, nominal_fps_den = 1;
+    int audio_stream_count = 0;
     double duration_seconds = 0;
+    bool duration_known = false;
     std::int64_t reported_frames = 0;
-    std::string codec, pixel_format, field_order;
+    std::string codec, pixel_format, field_order, container;
     int sample_aspect_num = 0, sample_aspect_den = 1;
     bool has_display_transform = false;
 };
@@ -67,6 +71,8 @@ struct Chunk {
     Stats cumulative_stats;
 };
 struct SourceStats {
+    std::int64_t metadata_probes = 1;
+    std::int64_t decoder_opens = 0;
     std::int64_t index_builds = 0;
     std::int64_t index_scanned_frames = 0;
     std::int64_t index_reuses = 0;
@@ -75,6 +81,18 @@ struct FrameTiming {
     std::int64_t source_index = 0;
     std::int64_t source_pts = 0;
     double timestamp_seconds = 0;
+};
+struct Metadata {
+    Info info;
+    std::optional<std::int64_t> frame_count;
+    std::optional<bool> variable_frame_rate;
+    std::string interlace_mode = "unknown";
+    std::optional<std::string> field_order;
+};
+struct TimeResolution {
+    double requested_time_seconds = 0;
+    FrameTiming nearest;
+    std::vector<FrameTiming> frames;
 };
 struct VideoPlan {
     int width = 0, height = 0;
@@ -91,6 +109,9 @@ public:
     VideoSource(const VideoSource&) = delete;
     VideoSource& operator=(const VideoSource&) = delete;
     const Info& info() const noexcept;
+    Metadata metadata(const Options& options = {});
+    TimeResolution resolve_time(double seconds, int radius_frames = 2,
+                                const Options& options = {});
     VideoPlan plan(const Options& options);
     VideoReader create_reader(Options options);
     SourceStats source_stats() const;

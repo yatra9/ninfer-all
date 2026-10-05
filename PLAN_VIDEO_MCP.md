@@ -190,6 +190,14 @@ CPU テストだけなら GPU を使用しない。実動画・モデルの moun
 - コンテナの Python は確認済み `/usr/bin/python3` 3.12.3。CMake registration と汎用 fixture スクリプト用に使用する。既存 maintainer Python 3.11 環境はこの Ubuntu image にない。Python product/converter の変更はない。
 - OpenCode source の MCP SDK は 1.29.0、native lowering の MIME 集合は `video/mp4`, `video/webm`, `video/quicktime`。C++ 候補 `fastmcpp` の license/source を取得して評価中。
 
+### 実装チェックポイント: 共通 source service と時刻 API
+
+- `VideoSourceService` を media 共通層へ追加し、モデル frontend の source cache を移行。標準 instance をプロセス共有し、認可済み source の LRU・size/mtime invalidation・同一 source の probe 合流を実装。eviction 後も active source に再合流する。
+- `VideoSource::metadata/resolve_time` を追加。audio/rate/container metadata、完全 index 後の exact count、CFR/VFR・interlace 観測、整数 PTS 最近傍探索、前 frame tie、最終 PTS 範囲検証を実装。公開 timestamp と既存 reader/plan を frame 0 基準へ統一。
+- 元 source の codec parameters/time base を保持し、index scan と reader の reopen 時に `avformat_find_stream_info` を繰り返さない。decoder は request-local で、`decoder_opens` と `metadata_probes` は別に計測する。
+- WSLC CUDA 13.1/sm_86 で `ninfer_video_source_service_test` と `ninfer_qwen3_5_local_video_payload_test` を増分ビルドし、CTest 2/2 成功（0.80 秒）。新規 fixture は CFR/B-frame/内部開始 100 秒/audio、VFR、interlaced。同時 index、LRU active reuse、mtime invalidation、cancel/retry、reader の時刻原点も検証。CPU-only、CUDA kernel の再コンパイルなし。
+- GPU 推論、MCP HTTP、OpenCode E2E は後続フェーズで検証。次: shared URI builder と MCP SDK の組み込み。
+
 計画確定時の検証: schema の JSON parse、3 tools の存在、文書内の相対リンク、変更ファイルの whitespace check を確認済み。今回の変更は計画・仕様・schema・作業規則のみ。実装 build、動画処理テスト、OpenCode E2E は実装未着手のため未実行。
 
 参照した外部一次資料（2026-10-06 確認）:

@@ -65,7 +65,8 @@ Run `video-lab:dev --help` for all options.
 - Frame indices refer to decoded display order and start at zero.
 - `end_frame` is inclusive. `skip_frame=N` selects every `N+1` source frames,
   anchored at `start_frame`.
-- Timestamps come from each frame's FFmpeg best-effort PTS and stream time base.
+- Timestamps come from each frame's FFmpeg best-effort PTS and stream time base,
+  relative to the first source frame's PTS. A selected range retains that source origin.
   The library refuses to synthesize missing timestamps from average FPS.
 - Indexed mode first builds a lightweight PTS/keyframe index. Before publishing
   output, it verifies that decode from the selected random-access point reaches

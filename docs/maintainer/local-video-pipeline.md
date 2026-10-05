@@ -138,6 +138,8 @@ patch and position storage while retaining global scatter indices and does not c
 ## Timing and identity
 
 Every selected frame carries its original display index, PTS, time base, and seconds timestamp.
+Seconds are relative to source frame zero's presentation PTS, including when the container starts
+at a nonzero or negative PTS. Selecting a later range does not reset that origin.
 For each two-frame group, the prompt timestamp is the mean of the two exact source timestamps. CFR
 may produce those timestamps from exact frame timing; VFR always uses decoded PTS. Timestamps do not
 restart at the selected range or at a chunk boundary.
@@ -147,7 +149,8 @@ directly from the reusable complete index. It enforces the same selection and re
 the reader and performs no RGB conversion. The frontend transforms this result into model-specific
 temporal groups and token counts before execution.
 
-The frontend keeps up to eight `VideoSource` entries in an LRU cache keyed by canonical path,
+The process-wide `media::local_video::VideoSourceService` keeps up to eight `VideoSource` entries
+in an LRU cache keyed by canonical path,
 file size, and modification time. An unchanged path reuses its completed frame index across
 requests. A changed file publishes a new source; active requests retain the old source and its
 unchanged checks reject mutation safely. Eviction drops only the cache reference, so it cannot
