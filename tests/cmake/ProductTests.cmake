@@ -102,3 +102,11 @@ endif()
 ninfer_add_test(ninfer_http_transport_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_http_transport.cpp"
   LIBRARIES ninfer_serve)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(ninfer_video_mcp_http_fixture "${CMAKE_CURRENT_LIST_DIR}/../video_mcp_http_fixture.cpp")
+  ninfer_test_includes(ninfer_video_mcp_http_fixture)
+  target_link_libraries(ninfer_video_mcp_http_fixture PRIVATE ninfer_video_mcp)
+  add_test(NAME ninfer_video_mcp_http_test COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_LIST_DIR}/../run_video_mcp_http_test.py"
+    "$<TARGET_FILE:ninfer_video_mcp_http_fixture>" "${PROJECT_SOURCE_DIR}/mcp/tool-schema.json")
+endif()

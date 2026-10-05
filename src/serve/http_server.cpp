@@ -8,6 +8,7 @@
 #include "serve/openai_common.h"
 #include "serve/request_log.h"
 #include "serve/webui.h"
+#include "serve/video_mcp.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/logger.h>
@@ -25,13 +26,13 @@ namespace {
 
 constexpr std::string_view kCorsAllowedHeaders =
     "Authorization, Content-Type, X-API-Key, anthropic-version, anthropic-beta, "
-    "anthropic-user-profile-id";
+    "anthropic-user-profile-id, MCP-Protocol-Version, Mcp-Session-Id, Last-Event-ID";
 
 // API routes keep their own 404s. Every other GET path belongs to the WebUI, whose client-side
 // router owns paths the server has no file for.
 bool is_api_path(std::string_view path) {
     return path == "/v1" || path.starts_with("/v1/") || path == "/health" || path == "/metrics" ||
-           path == "/stats" || path == "/slots" || path == "/props" || path == kMcpProxyPath;
+           path == "/stats" || path == "/slots" || path == "/props" || path == "/mcp" || path == kMcpProxyPath;
 }
 
 
@@ -243,9 +244,12 @@ HttpServer::HttpServer(ServeOptions options, std::shared_ptr<spdlog::logger> log
     : options_(std::move(options)), openai_responses_store_(options_.response_store_max_records,
                                                             options_.response_store_max_bytes),
       operational_log_(logger),
-      request_jsonl_(options_.request_log_jsonl, options_.artifact_path, std::move(logger),
+      request_jsonl_(options_.request_log_jsonl, options_.artifact_path, logger,
                      static_cast<std::uint64_t>(options_.request_log_max_mib) << 20U,
                      options_.request_log_keep) {
+#ifdef NINFER_VIDEO_MCP
+    video_mcp_logger_ = std::move(logger);
+#endif
     if (options_.log_stats_panel && panel != nullptr && panel->enabled()) {
         console_stats_ = std::make_unique<ConsoleStatsPanel>(std::move(panel));
     }
@@ -383,6 +387,10 @@ void HttpServer::stop_stats_reporter() {
 httplib::Server::HandlerResponse HttpServer::pre_route(const httplib::Request& req,
                                                        httplib::Response& res) const {
     ensure_openai_request_id(req, res);
+#ifdef NINFER_VIDEO_MCP
+    if (video_mcp_ && video_mcp_->reject_request(req, res))
+        return httplib::Server::HandlerResponse::Handled;
+#endif
     const auto inference_gate = [&] {
         if (req.method == "POST" &&
             (req.path == "/v1/chat/completions" || req.path == "/v1/responses" ||
@@ -445,6 +453,10 @@ httplib::Server::HandlerResponse HttpServer::pre_route(const httplib::Request& r
 }
 
 void HttpServer::register_routes() {
+#ifdef NINFER_VIDEO_MCP
+    video_mcp_ = std::make_unique<VideoMcpServer>(options_.local_media_root, options_.host, video_mcp_logger_);
+    video_mcp_->register_routes(server_);
+#endif
     server_.set_error_handler([this](const httplib::Request& request, httplib::Response& response) {
         return handle_unrendered_http_error(options_, request, response);
     });
@@ -921,11 +933,17 @@ bool HttpServer::listen() {
 }
 
 void HttpServer::stop() {
+#ifdef NINFER_VIDEO_MCP
+    if (video_mcp_) video_mcp_->stop();
+#endif
     stats_server_.stop();
     server_.stop();
 }
 
 HttpServer::~HttpServer() {
+#ifdef NINFER_VIDEO_MCP
+    if (video_mcp_) video_mcp_->stop();
+#endif
     stop_stats_listener();
     if (startup_listener_.joinable()) {
         server_.stop();

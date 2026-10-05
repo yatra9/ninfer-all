@@ -1039,3 +1039,11 @@ VideoSourceService
 ```
 
 これにより、agent が同一動画を段階的に調査するときの repeated probe / repeated timestamp scan / redundant file open を最小化する。
+
+### 確定した実装契約（2026-10-06）
+
+- 指定 OpenCode の native-video lowering に合わせ、`inspect_video` の custom resource link は、元 container に関係なく互換用 MIME `video/mp4` を付ける。ユーザー承認済み。URI は native video input の識別子で、MP4 bytes を配信する HTTP resource ではない。実ファイル形式は既存 FFmpeg pipeline が検出する。
+- Linux の `/mcp` は既存 listener に登録する。fastmcpp pinned transport の MCP 2025-11-25 / 2025-06-18 profile を使用し、POST は JSON、GET は 405、DELETE は session 終了。initialize と initialized 通知を完了してから tools を呼ぶ。sampling 等の server-initiated request は提供しない。
+- 3 tools の path は絶対 local path に統一する。query の分解は行わず、`?` 等はファイル名の一部として扱う。root 認可と symlink 解決は全 call で実施する。
+- tool call は最大4並行、scan 上限2,000,000 frames、geometry 上限64 Mi pixels、120秒 deadline。MCP cancelled 通知と shutdown は probe/scan/wait の checkpoint へ伝播する。OS filesystem 操作自体は同期的で、割り込み不能な filesystem syscall の即時停止までは保証しない。
+- 未設定 local-media-root でも discovery は可能。実 tool は local_media_disabled の tool error を返す。既存 API key を全 MCP request に適用し、OPTIONS は既存 CORS policy に従う。Host は loopback または明示 bind host、Origin は同一 HTTP origin を検証する。

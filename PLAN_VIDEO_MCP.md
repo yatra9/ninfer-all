@@ -94,7 +94,7 @@ patch は `resource_link` の URI が `ninfer-video://` で、MIME が `video/` 
 - Linux/WSLC が開く path はコンテナ内絶対パス。Windows drive path を Linux のファイル名として開いたり、暗黙に `/mnt/...` へ変換したりしない。Windows host path は起動時の bind mount で container path に対応させ、未対応の drive URI は明確に拒否する。native Windows decoder 対応は今回の範囲外。
 - root・存在・可読性、source 寸法内 bbox、scale、skip、deinterlace、開始終了順、既知 exact count を検証する。bbox clamp は行わない。
 - inspect のためだけに未知 frame count の全 scan は強制しない。未知の終端は後段 decode が検証する。既知の index は再利用する。
-- 結果は instruction を含む text と canonical URI の `resource_link`。指定 OpenCode patch が受理する正しい `video/*` MIME を必ず付ける。MKV 等も一律 `video/mp4` にせず、実 container と client の受理集合を照合する。対応 MIME がない場合は黙って text 化させず、互換性の未解決事項として扱う。`inspect_video` には outputSchema がない現行 schema を尊重する。
+- 結果は instruction を含む text と canonical URI の `resource_link`。ユーザー承認済み（2026-10-06）: custom native resource の MIME は compatibility tag `video/mp4` に統一する。実ファイルの container/codec は FFmpeg が判定し、元ファイルの拡張子や bytes を変換しない。`inspect_video` には outputSchema がない現行 schema を尊重する。
 
 ### 4.4 MCP transport と schema
 
@@ -176,11 +176,12 @@ CPU テストだけなら GPU を使用しない。実動画・モデルの moun
 - [x] 本計画を作成。
 - [x] Q1 の回答と指定 OpenCode patch の統合条件を反映。
 - [x] Q2～Q3 の回答を計画・仕様・schema へ反映。
-- [ ] MCP library/protocol の選定と同一 HTTP server 統合 spike。
-- [ ] dev image/container 作成と BuildKit 中間生成物の再利用確認。
-- [ ] Phase 1～5 の実装と検証。
+- [x] fastmcpp pinned transport と同一 HTTP server 統合、CPU HTTP 検証。
+- [x] dev image/container 作成と BuildKit 中間生成物の再利用確認。
+- [x] Phase 1～4 の実装と CPU 検証。
+- [ ] Phase 5: 実 server / 指定 OpenCode の同一 agent E2E。
 
-次の作業: 共有 source service と metadata/time API を実装し、既存動画入力の回帰を検証する。並行して MCP ライブラリの既存 HTTP server 組み込みを確認する。現時点で追加のユーザー回答待ちはない。
+次の作業: 指定モデルを使用し、実 server の認証・suspend 中 tools と指定 OpenCode の E2E を検証する。追加のユーザー回答待ちはない。
 
 ### 実装チェックポイント: WSLC 開発環境
 
@@ -210,3 +211,21 @@ CPU テストだけなら GPU を使用しない。実動画・モデルの moun
 - `build_local_video_url` を既存 parser と同じ product module に追加。UTF-8・空白・予約文字を percent escape し、既定値を省いた一定順序の query を生成する。生成後に同じ parser で制約を検証する。
 - WSLC 内で既存 `test_local_video_url.cpp` を CPU-only で直接 build/run。既存 path/root/symlink 検証と、日本語・予約文字・scale 精度・全引数の round trip が成功。
 - MCP HTTP/実モデルはまだ未検証。次: fastmcpp transport の同一 server 登録、schema 埋め込みと3 tools の実装。
+
+### 実装中チェックポイント: MCP HTTP / 判断待ち
+
+- fastmcpp 3.4.7.1 の pinned transport subset を追加し、既存 httplib server への route 登録 adapter を実装。MCP 2025-11-25 / 2025-06-18、POST JSON、GET 405、DELETE session 終了を実装。JSON-RPC envelope、HTTP media headers、session/version を検証。
+- schema 正本を CMake configure で埋め込み、3 tools と schema validation、root 認可、geometry/range validation、4 並行 call 上限、120 秒 checkpoint、cancel/shutdown を実装中。
+- WSLC で `ninfer-serve` と CPU HTTP fixture を増分 build 成功。CTest `video_mcp_http|video_source_service|local_video_payload` 3/3 成功（1.01 秒）。HTTP discovery は正本 schema と完全一致し、malformed JSON、protocol error、tool error、Host/Origin、DELETE、特殊文字 URI を検証した。実 server の認証・suspend 中 tools・OpenCode E2E は未検証。
+- この単位は未 commit。草案の inspect MIME は custom native resource の compatibility tag として `video/mp4` を付けるが、計画 §4.3 は実 container MIME を要求していたため採用判断待ち。指定 OpenCode の lowering が video/mp4・video/webm・video/quicktime のみで MKV を拒否することを確認済み。無断で方針変更していない。
+- 実モデル `.ninfer` は workspace 内に見つからず、WSLC volume は ccache のみ。GPU は nvidia-smi で 0 MiB / 24 GiB、process なし。E2E に使用する明示的なモデル artifact path を回答待ち。
+- 次: MIME 方針の回答を SPEC/PLAN に反映し、transport lifecycle と cancellation の検証を補強、既存 serving 回帰、実 server / 指定 OpenCode の E2E を実行して本単位を commit。開発 container と build directory は上記チェックポイントのまま。
+
+### 実装チェックポイント: MCP transport / 3 tools 完了
+
+- 前節の判断待ちは解消。互換用 MIME `video/mp4` をユーザー承認どおり採用し、SPEC と計画 §4.3 を更新。指定モデルは `C:\AI\ninfer-rtx3090-windows-x64-0.11.0-rtx3090\models\huihui-Qwen3.8-27B-abliterated-NInfer-v3\Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer`。native volume `ninfer-video-mcp-models` へコピーし SHA256SUMS 2/2 一致。
+- Linux `/mcp` を既存 HttpServer に登録。API path/CORS/Host/Origin/既存 auth と統合。fastmcpp pinned subset の protocol/session transport を使用し、正本 schema を埋め込んだ strict tool validation と3 tools を実装。全 tools が共通 source service を使用し、inspect は inference を呼ばない。
+- initialized 通知、session DELETE、protocol/media/envelope error を検証。4-call 上限、120秒 deadline、cancel/shutdown を source probe・per-source lock 待ち・index scan へ伝播。debug log は canonical source、metadata hits/probes/evictions、index builds/reuses/count/time、decoder opens、resolve、inspect URI を記録。
+- `ninfer-serve`、CPU fixture、既存 `ninfer_tests` bundle を WSLC で build。元モデル CUDA kernels は再コンパイルなし。関連 CTest 10件が成功: source service、URI、OpenAI/Anthropic schema、Responses store、MCP proxy、HTTP error/transport、MCP HTTP、local-video payload。MCP fixture は cancellation と再試行、media-root 無効 discovery、2025-06-18/11-25、MP4/MKV link、malformed/unsupported requests を検証。
+- source fixture を coarse 30000/1001 CFR MKV と progressive/interlaced mixed MKV へ拡張。concat 元の container duration により境界 PTS が重なった fixture を duration 指定で修正し、service test 再実行成功。欠損・重複 PTS を許容する product 変更はしていない。
+- 未検証: 実 server 認証・model suspend 中 tools、指定 exe discovery/同一 agent native-video E2E。次は Phase 5。E2E container `ninfer-video-mcp-acceptance` (image ninfer-all:dev, model volume read-only, port localhost:18081) を準備済み。モデルはまだ起動していない。dev binary の一時配信は開発 container の `/build/.../apps`、port 18080。

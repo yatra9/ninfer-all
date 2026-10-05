@@ -33,6 +33,21 @@ with tempfile.TemporaryDirectory(prefix="ninfer-video-source-") as directory:
         stamps = [float(frame["best_effort_timestamp_time"]) for frame in probe["frames"]]
         manifest.append({"path": str(path), "times": [value-stamps[0] for value in stamps],
                          "audio": int(audio), "interlace": interlace, "vfr": vfr, "tie": name == "cfr"})
+    coarse = root / "coarse-cfr.mkv"
+    run("ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+        "testsrc2=size=96x64:rate=30000/1001:duration=1", "-c:v", "libx264", "-y", str(coarse))
+    # Concatenate encoded progressive and interlaced segments; keep their frame flags.
+    concat = root / "concat.txt"
+    concat.write_text(f"file '{root / 'vfr.mp4'}'\nduration 3.5\nfile '{root / 'interlaced.mp4'}'\n")
+    mixed = root / "mixed.mkv"
+    run("ffmpeg", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(concat),
+        "-c", "copy", "-y", str(mixed))
+    for path, interlace in [(coarse, "progressive"), (mixed, "mixed")]:
+        probe = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_frames",
+                              "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", str(path)))
+        stamps = [float(frame["best_effort_timestamp_time"]) for frame in probe["frames"]]
+        manifest.append({"path": str(path), "times": [value-stamps[0] for value in stamps],
+                         "audio": 0, "interlace": interlace, "vfr": interlace == "mixed", "tie": False})
     manifest_path = root / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
     subprocess.run([sys.argv[1], str(manifest_path)], check=True)

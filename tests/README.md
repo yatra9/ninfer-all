@@ -384,3 +384,9 @@ timestamps, non-code edits, and one-file incremental compilation. Docker BuildKi
 `podman` can be passed instead to check that builder. Logs and the fixture remain in an ignored
 `build-cache-test.*` directory; the test image and its small build caches remain in the builder.
 The check needs the Dockerfile's build dependencies but no GPU or model weights.
+
+`ninfer_video_mcp_http_test` is CPU-only on Linux. It generates a small FFmpeg
+fixture and verifies the production MCP transport/tools over a real HTTP socket,
+including embedded schema equality, metadata/resolve/inspect, malformed requests,
+Host/Origin validation and session termination. Run with the video source and
+local-video payload regressions: `ctest -R 'video_mcp_http|video_source_service|local_video_payload'`.

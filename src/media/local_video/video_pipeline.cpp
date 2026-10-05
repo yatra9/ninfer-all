@@ -447,10 +447,10 @@ struct VideoSource::Impl {
     Stats index_stats;
     SourceStats diagnostics;
 
-    explicit Impl(std::filesystem::path p):path(std::move(p)) {
+    explicit Impl(std::filesystem::path p, const Options& options):path(std::move(p)) {
         size=std::filesystem::file_size(path);
         modified=std::filesystem::last_write_time(path);
-        Input input(path);
+        Input input(path, &options);
         metadata=inspect_input(input);
         cached=std::make_shared<CachedStream>();
         cached->info=metadata;
@@ -532,7 +532,23 @@ struct VideoSource::Impl {
                         if (std::abs((static_cast<long double>((*candidate)[i].pts)-
                                       candidate->front().pts)-step*i)>1.0L) { linear=false; break; }
                     }
-                    candidate_variable=!linear;
+                    if (!linear) candidate_variable=true;
+                    else if (!variable) candidate_variable=false;
+                    else if (metadata.nominal_fps_num>0 && metadata.nominal_fps_den>0) {
+                        const long double reported_step =
+                            static_cast<long double>(metadata.time_base_den)*metadata.nominal_fps_den/
+                            (static_cast<long double>(metadata.time_base_num)*metadata.nominal_fps_num);
+                        bool reported_linear=true;
+                        for (std::size_t i=1;i<candidate->size();++i) {
+                            checkpoint(o);
+                            if (std::abs((static_cast<long double>((*candidate)[i].pts)-
+                                          candidate->front().pts)-reported_step*i)>1.0L) {
+                                reported_linear=false; break;
+                            }
+                        }
+                        if (reported_linear) candidate_variable=false;
+                        // Small irregularities without a matching reported cadence remain unknown.
+                    }
                 }
                 if (last_duration<=0 && candidate->size()>1)
                     last_duration=candidate->back().pts-(*candidate)[candidate->size()-2].pts;
@@ -557,6 +573,7 @@ struct VideoSource::Impl {
                     index=std::move(candidate); // Publish only a complete, unchanged index.
                     ++diagnostics.index_builds;
                     diagnostics.index_scanned_frames+=completed.indexed_frames;
+                    diagnostics.index_seconds=completed.index_seconds;
                     index_building=false;
                 }
                 index_changed.notify_all();
@@ -634,7 +651,8 @@ struct VideoReader::Impl {
     }
 };
 
-VideoSource::VideoSource(std::filesystem::path path):impl_(std::make_shared<Impl>(std::move(path))) {}
+VideoSource::VideoSource(std::filesystem::path path, const Options& options)
+    :impl_(std::make_shared<Impl>(std::move(path), options)) {}
 VideoSource::~VideoSource()=default;
 VideoSource::VideoSource(VideoSource&&) noexcept=default;
 VideoSource& VideoSource::operator=(VideoSource&&) noexcept=default;

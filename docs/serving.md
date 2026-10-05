@@ -1799,3 +1799,31 @@ use [structured output](#structured-output).
 
 Prompt-token usage includes chat-template and expanded media tokens. Generated-token usage comes
 from accepted output token IDs, including a stop token whose decoded text may be withheld.
+
+## Native video MCP (Linux / WSLC)
+
+The existing HTTP listener also serves `/mcp`. Configure `--local-media-root /videos`
+to enable `get_video_metadata`, `resolve_video_time`, and `inspect_video`. Each tool
+accepts an absolute local file path visible inside the container; selection options
+are separate tool arguments. Discovery remains available without a media root.
+The same source metadata/index cache is shared with native video inference.
+
+MCP uses Streamable HTTP (2025-11-25 or 2025-06-18): POST returns JSON, GET returns
+405, and DELETE closes a session. Send the negotiated `MCP-Protocol-Version` and
+`Mcp-Session-Id` after initialize and send `notifications/initialized` before tools.
+Existing API-key authentication applies. MCP validates Host and browser Origin;
+loopback access and an explicitly bound host are accepted. Keep reverse-proxy Host
+and Origin consistent with that address. `/cors-proxy` remains the separate WebUI relay.
+
+`inspect_video` returns instruction text and a `ninfer-video://` resource link for
+the same agent's next model call. Its MIME is `video/mp4` as a compatibility tag
+for the supplied OpenCode native-video patch, including MKV sources; it serves no
+MP4 download and does not transcode the source. FFmpeg detects the actual source
+format. OpenCode must use the supplied patched executable and the
+`opencode-ninfer` provider with NInfer's `/v1` base URL.
+
+Tools use CPU-only video processing, including while the model is suspended.
+Four concurrent tool calls, a 120-second checkpoint deadline, two million indexed
+frames and 64 Mi output pixels bound resource use. Cancellation notifications and
+shutdown cancel probe/index work. Decoded video frames are not retained by this cache.
+Full paths and generated URIs should only be inspected in debug logs.

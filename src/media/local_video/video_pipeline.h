@@ -76,6 +76,7 @@ struct SourceStats {
     std::int64_t index_builds = 0;
     std::int64_t index_scanned_frames = 0;
     std::int64_t index_reuses = 0;
+    double index_seconds = 0;
 };
 struct FrameTiming {
     std::int64_t source_index = 0;
@@ -102,7 +103,7 @@ struct VideoPlan {
 class VideoReader;
 class VideoSource {
 public:
-    explicit VideoSource(std::filesystem::path path);
+    explicit VideoSource(std::filesystem::path path, const Options& options = {});
     ~VideoSource();
     VideoSource(VideoSource&&) noexcept;
     VideoSource& operator=(VideoSource&&) noexcept;

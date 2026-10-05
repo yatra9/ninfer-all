@@ -1,0 +1,4 @@
+#pragma once
+namespace ninfer::serve {
+inline constexpr char video_mcp_schema[] = R"ninfer_schema(@NINFER_VIDEO_TOOL_SCHEMA@)ninfer_schema";
+}

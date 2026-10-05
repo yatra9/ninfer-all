@@ -1,6 +1,7 @@
 #include "media/local_video/video_source_service.h"
 
 #include <mutex>
+#include <chrono>
 #include <unordered_map>
 
 namespace ninfer::media::local_video {
@@ -10,13 +11,14 @@ struct VideoSourceService::Impl {
         std::filesystem::path path;
         std::uintmax_t size;
         std::filesystem::file_time_type modified;
-        std::mutex mutex;
+        std::timed_mutex mutex;
         std::weak_ptr<VideoSource> source;
         std::shared_ptr<VideoSource> retained;
         std::uint64_t last_use = 0;
     };
     std::size_t maximum_entries;
     std::uint64_t clock = 0;
+    VideoServiceStats stats;
     std::mutex mutex;
     std::unordered_map<std::string, std::shared_ptr<Entry>> entries;
     explicit Impl(std::size_t maximum) : maximum_entries(maximum) {
@@ -28,13 +30,16 @@ VideoSourceService::VideoSourceService(std::size_t maximum_entries)
     : impl_(std::make_unique<Impl>(maximum_entries)) {}
 VideoSourceService::~VideoSourceService() = default;
 
-std::shared_ptr<VideoSource> VideoSourceService::acquire(const std::filesystem::path& requested) {
+std::shared_ptr<VideoSource> VideoSourceService::acquire(const std::filesystem::path& requested,
+                                                       const Options& options) {
+    if (options.checkpoint) options.checkpoint();
     const auto path = std::filesystem::canonical(requested);
     const auto size = std::filesystem::file_size(path);
     const auto modified = std::filesystem::last_write_time(path);
     std::shared_ptr<Impl::Entry> entry;
     {
         std::lock_guard lock(impl_->mutex);
+        ++impl_->stats.acquisitions;
         auto& slot = impl_->entries[path.string()];
         if (!slot || slot->size != size || slot->modified != modified) {
             slot = std::make_shared<Impl::Entry>();
@@ -47,18 +52,23 @@ std::shared_ptr<VideoSource> VideoSourceService::acquire(const std::filesystem::
     std::shared_ptr<VideoSource> source;
     {
         // Probe only while holding this source's lock, never the global LRU lock.
-        std::lock_guard lock(entry->mutex);
+        std::unique_lock lock(entry->mutex, std::defer_lock);
+        while (!lock.try_lock_for(std::chrono::milliseconds(10)))
+            if (options.checkpoint) options.checkpoint();
+        if (options.checkpoint) options.checkpoint();
         {
             std::lock_guard cache_lock(impl_->mutex);
             source = entry->source.lock();
+            if (source) ++impl_->stats.metadata_hits;
         }
         if (!source) {
-            source = std::make_shared<VideoSource>(path);
+            source = std::make_shared<VideoSource>(path, options);
             if (std::filesystem::file_size(path) != size ||
                 std::filesystem::last_write_time(path) != modified)
                 throw Error(ErrorKind::SourceChanged, "video changed during metadata probe");
             std::lock_guard cache_lock(impl_->mutex);
             entry->source = source;
+            ++impl_->stats.metadata_probes;
         }
     }
     {
@@ -80,9 +90,16 @@ std::shared_ptr<VideoSource> VideoSourceService::acquire(const std::filesystem::
             }
             ++it;
         }
-        if (retained > impl_->maximum_entries) oldest->retained.reset();
+        if (retained > impl_->maximum_entries) {
+            oldest->retained.reset();
+            ++impl_->stats.evictions;
+        }
     }
     return source;
+}
+VideoServiceStats VideoSourceService::stats() const {
+    std::lock_guard lock(impl_->mutex);
+    return impl_->stats;
 }
 
 std::shared_ptr<VideoSourceService> shared_video_source_service() {

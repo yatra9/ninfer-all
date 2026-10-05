@@ -304,7 +304,7 @@ std::string serve_usage_text(const char* argv0) {
            "  --media-live-mib N            all live prepared media payloads (default 2048)\n"
            "  --media-preprocess-threads N  media preprocessing workers (default 0: auto, at\n"
            "                                most 16)\n"
-           "  --local-media-root PATH       enable ninfer-video for absolute files beneath this\n"
+           "  --local-media-root PATH       enable native video and Linux /mcp video tools beneath this\n"
            "                                container path (disabled by default)\n"
            "  --local-video-max-tokens N    aggregate local-video Vision tokens, 1..98304\n"
            "                                (default 98304; execution chunks use\n"

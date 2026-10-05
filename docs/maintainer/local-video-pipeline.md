@@ -217,3 +217,9 @@ completed, demonstrating request cleanup and overlay restoration.
 The product URI module also provides `build_local_video_url(LocalVideoSpec)` for typed callers.
 It percent-escapes UTF-8 path bytes, omits default controls, and validates the generated URI with
 its parser. MCP and native input therefore share the same selection syntax.
+
+MCP callers supply the same cancellation/deadline checkpoint to source acquisition,
+metadata and indexing. Probe waits are interruptible, and the libav interrupt
+callback observes the checkpoint during initial stream discovery. Service-wide
+hit/probe/eviction counters and per-source index/decoder diagnostics are available
+without retaining decoded frames; the HTTP adapter emits them only at debug level.
