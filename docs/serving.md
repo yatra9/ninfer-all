@@ -1811,6 +1811,9 @@ from accepted output token IDs, including a stop token whose decoded text may be
 
 ## Native video MCP (Linux / WSLC)
 
+OpenCode installation examples, project/global AGENTS and skill templates, and
+startup instructions are in [mcp/README.md](../mcp/README.md).
+
 The existing HTTP listener also serves `/mcp`. Sessions expire after 60 seconds
 without completing initialization, or 30 minutes idle after initialization.
 Active tool calls retain their session until completion. Expired session IDs

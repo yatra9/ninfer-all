@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "opencode-ninfer": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NInfer",
+      "options": {"baseURL": "http://127.0.0.1:8080/v1", "apiKey": "local"},
+      "models": {
+        "qwen3.8-27b": {
+          "name": "Qwen3.8-27B", "attachment": true, "tool_call": true,
+          "limit": {"context": 8192, "output": 1024},
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]}
+        }
+      }
+    }
+  },
+  "model": "opencode-ninfer/qwen3.8-27b",
+  "mcp": {
+    "ninfer-video": {
+      "type": "remote", "url": "http://127.0.0.1:8080/mcp", "enabled": true,
+      "headers": {"Authorization": "Bearer local"}
+    }
+  }
+}

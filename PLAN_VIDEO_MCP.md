@@ -334,3 +334,11 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - CLIとMCP実HTTPのCTest 2/2成功（17.94秒）。Windows/UNC/POSIX入力、複数map/最深一致、case/separator差、日本語・予約文字、duplicate/relative/missing argument拒否、URIのcontainer path一致、symlink root外拒否を検証。既存HTTP/schema/session/frame/timing/cancel回帰も含む。
 - GPU非公開containerではCLI testのlibcuda.so.1ロードに失敗したため、CUDA SDKのdriver stubを/tmp/video-mcp-cuda-stubへsymlinkし、CPU test commandのLD_LIBRARY_PATHだけに設定して成功。GPU実行・モデルロードは行っていない。Python3.12.3は既存WSLC fixture interpreterの確認済み例外。build unknown表示はrsync sourceの既知の制限。
 - 完全diff reviewとgit diff --check成功。GPU実model/OpenCode E2Eは再実行していない。開発containerは保持。実装完了、判断待ち・次の実装作業なし。運用イメージninfer-all:latestへの反映には通常のwslc build -t ninfer-all .を実行する。
+
+### 配置用examplesとtools/list schema同期
+
+- mcp/AGENTS.md、mcp/SKILL.md、mcp/opencode.example.json、mcp/README.mdを追加。OpenCodeのproject/global/併用配置、Windows PowerShellコピー、Linux配置path、WSLC server起動、mount/path map、認証、patched provider、skill discovery/実frame確認手順を収録。単一frame・CFR/VFR探索・crop/scale・エラー対応を最新動作へ反映。serving guideからリンク。
+- 指定OpenCodeのsourceでglobal.config（XDG_CONFIG_HOME/OPENCODE_CONFIG_DIR）、AGENTSのproject/global読み込み、global skillsおよびproject .opencode/skills discovery、debug skill commandを確認。配置・起動のPowerShell全blockをAST parse、設定JSONと相対リンクを検証。実ユーザーのglobal/projectへは配置していない。記載のGPU server起動/OpenCode E2Eは今回は実行していない。
+- ユーザー追加要求に従い、最新production MCP routeを使用するWSLC CPU HTTP fixtureへinitialize→initialized→tools/listを送信し、そのresultをmcp/tool-schema.jsonへ保存。3 toolsの内容は既存HEAD schemaと意味上完全一致、変更はresponseのkey orderへ同期するもの。GPUモデルはロードしていない。
+- 開発container/imagesが再び削除されていたため既存BuildKit cacheからninfer-all:build/:dev/ninfer-all-devを復元。baselineは前checkpointと同じ /build/686c96faa22541ca0074bacfa46b09ea921869de8ec4799e10e1c457cc481da4。production buildとHTTP fixture build成功、CUDA再コンパイルなし。export fixtureは終了し、dev containerは保持。
+- 完全diff review、JSON意味比較、git diff --check成功。schemaの公開契約変更がないdocumentation/example単位のため、既存CPU/GPU回帰の追加再実行は不要。実装・ユーザー判断待ちなし。利用者はmcp/README.mdに従い自分のOpenCode配置先へコピー/既存設定へマージする。
