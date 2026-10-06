@@ -4,8 +4,10 @@
 #include <thread>
 
 int main(int argc, char** argv) {
-    if (argc != 2) return 2;
-    ninfer::serve::VideoMcpServer mcp(argv[1], "127.0.0.1");
+    if (argc < 2 || argc % 2 != 0) return 2;
+    ninfer::serve::ReferencePathMaps maps;
+    for (int i = 2; i < argc; i += 2) maps.add(argv[i], argv[i + 1]);
+    ninfer::serve::VideoMcpServer mcp(argv[1], "127.0.0.1", {}, std::move(maps));
     httplib::Server server;
     server.set_pre_routing_handler([&](const httplib::Request& req, httplib::Response& res) {
         return mcp.reject_request(req, res) ? httplib::Server::HandlerResponse::Handled :

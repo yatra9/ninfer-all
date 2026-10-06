@@ -12,7 +12,7 @@
 
 各 tool の公開 name / description / inputSchema / outputSchema の正本は、同梱の `mcp/tool-schema.json` とする。
 
-3 tools の `path` は NInfer から見える local file path のみを受け付ける。URI は入力として受け付けず、query によるオプション指定も行わない。`inspect_video` の詳細な絶対パス要件は §9.2 に従う。生成した `ninfer-video://` URI は tool result と後続モデル入力に使用する。
+3 tools の `path` は絶対local file pathのみを受け付ける。NInferから直接見えるパスに加え、`--reference-path-map HOST_DIR CONTAINER_DIR` で指定したhost側のWindows/POSIXパスを受け付ける。URIは入力として受け付けず、queryによるオプション指定も行わない。生成した `ninfer-video://` URI は変換後のコンテナパスを使い、tool resultと後続モデル入力に使用する。
 
 本ファイルは、`tool-schema.json` を実際に `ninfer-all` に実装するための内部処理、共有キャッシュ、エラー処理、MCP transport、`ninfer-video://` との連携方法を定義する。
 
@@ -553,7 +553,7 @@ timestamp付き動画promptではなくimage tokens / image modalityを使用す
 このMIMEはOpenCodeの既存native-video attachment routeを選択するタグであり、画像モードでも変更しない。
 OpenCodeの既存patchはURIをそのまま後続 `video_url` に渡すため、client側に `frame` parserや修正を追加する必要はない。
 
-`path` 入力は **NInfer から見える動画ファイルの絶対パス** のみとする。Linux/WSLC では例として `/videos/demo.mp4` を指定する。`ninfer-video://`、`file://` 等の URI および相対パスは受け付けない。
+`path` 入力は **動画ファイルの絶対local path** のみとする。Linux/WSLCでは `/videos/demo.mp4` またはpath map対象のhostパスを指定する。`ninfer-video://`、`file://` 等のURIおよび相対パスは受け付けない。
 
 `path` の `?` 以降に query オプションを付ける方式はサポートしない。frame range、sampling、crop、scale、deinterlace は各 tool 引数で指定する。入力 path を URI として解析したり、query を取り出したりしない。ファイル名そのものに含まれる予約文字は出力 URI の生成時に escape する。
 
@@ -1070,3 +1070,14 @@ inspect_videoはnative動画入力と共通のmetadata-only geometry計算を使
 ### 監査補足: sessionの有効期限
 
 初期化未完了sessionは作成から60秒、初期化完了sessionは最後のrequest完了から30分で失効する。時刻はmonotonic clockを使う。POST/DELETE受信時に期限切れsessionと関連状態を回収し、1000 sessionの上限判定前にも回収する。handler実行中のsessionは失効させず、完了時にidle期限を更新する。失効したsession IDにはHTTP404を返すため、clientはinitializeし直す。DELETEによる明示終了も引き続き可能。
+
+### Host reference path mapping
+
+`ninfer-serve --reference-path-map HOST_DIR CONTAINER_DIR` を複数回指定できる。3つのMCP video toolsのpath引数だけに適用し、OpenAI互換APIのnative URIは従来どおりコンテナパスを指定する。
+
+- HOST_DIRは存在確認しない絶対Windows drive path（C:\Videos、C:/Videos）、backslash形式UNC（\\server\share\Videos）、または絶対POSIX path。CONTAINER_DIRは絶対POSIX directory path。
+- Windowsのドライブ・UNC root・一致判定の各componentはASCIIの大文字小文字を区別せず、slash/backslashを同じ区切りとして扱う。残りのファイル名は入力の綴りを保持するため、コンテナ内の名前と一致させる。非ASCII文字のcase foldingは行わない。POSIXはcase-sensitiveでbackslashも通常のfilename文字として扱う。
+- 重複separator、末尾separator、`.`/`..`をlexical正規化してからdirectory component単位で照合する。重なるmapは最も深いHOST_DIRを優先する。同一HOST_DIRの重複設定は起動時error。
+- 一致するmapがないPOSIX pathは直接のコンテナパスとして扱う。一致しないWindows path、drive-relative path、Windows device pathはinvalid_pathで拒否する。
+- 変換は1回のみ。変換後にcanonicalizeし、既存local-media-root認可・symlink検証・regular file検証を適用する。mapはmountを作成せず、local-media-rootを拡張しない。
+- get_video_metadataのpathとinspect_videoのresource URIはcanonical container pathを返す。hostパスをnative URIに埋め込まない。

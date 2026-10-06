@@ -306,6 +306,9 @@ std::string serve_usage_text(const char* argv0) {
            "                                most 16)\n"
            "  --local-media-root PATH       enable native video and Linux /mcp video tools beneath this\n"
            "                                container path (disabled by default)\n"
+           "  --reference-path-map HOST_DIR CONTAINER_DIR\n"
+           "                                map MCP host paths to container paths (repeatable;\n"
+           "                                longest directory match wins)\n"
            "  --local-video-max-tokens N    aggregate local-video Vision tokens, 1..98304\n"
            "                                (default 98304; execution chunks use\n"
            "                                --vision-max-merged)\n"
@@ -603,6 +606,10 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 throw std::invalid_argument("--media-preprocess-threads must be in [0,64]");
             }
             options.media_preprocess_threads = static_cast<std::uint32_t>(threads);
+        } else if (arg == "--reference-path-map") {
+            const std::string host_dir = require_value("--reference-path-map HOST_DIR");
+            const std::string container_dir = require_value("--reference-path-map CONTAINER_DIR");
+            options.reference_path_maps.add(host_dir, container_dir);
         } else if (arg == "--local-media-root") {
             options.local_media_root = require_value("--local-media-root");
             if (options.local_media_root.empty() || !options.local_media_root.is_absolute()) {

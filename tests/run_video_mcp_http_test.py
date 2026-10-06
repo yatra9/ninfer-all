@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -18,7 +19,13 @@ def main():
         subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
                         "color=red:size=64x48:rate=4:duration=2", "-c:v", "libx264",
                         "-bf", "2", "-y", str(path)], check=True)
-        process = subprocess.Popen([sys.argv[1], directory], stdin=subprocess.PIPE,
+        mapped_dir = root / "mapped"
+        mapped_dir.mkdir()
+        (mapped_dir / path.name).write_bytes(path.read_bytes())
+        (root / "escape.mp4").symlink_to("/etc/passwd")
+        process = subprocess.Popen([sys.argv[1], directory,
+            "C:\\Host Videos", directory, "/host/videos", directory,
+            "c:/host videos/special", str(mapped_dir), "\\\\Server\\Share", directory], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, text=True)
         try:
             port = int(process.stdout.readline())
@@ -98,6 +105,26 @@ def main():
                     assert not response["isError"]
                     assert response["structuredContent"]["nearest_frame_number"] == expected_frame
             assert call("get_video_metadata", {"path": str(path)})["structuredContent"]["frame_count"] == 8
+            for reference in ("c:/HOST VIDEOS/" + path.name,
+                              "C://Host Videos/./" + path.name,
+                              "/host/videos/" + path.name,
+                              "\\\\server\\SHARE\\" + path.name):
+                mapped_metadata = call("get_video_metadata", {"path": reference})
+                assert mapped_metadata["structuredContent"]["path"] == str(path)
+                assert not call("resolve_video_time", {"path": reference, "time_seconds": 0})["isError"]
+                mapped_link = call("inspect_video", {"path": reference, "frame": 0, "instruction": "color"})
+                assert not mapped_link["isError"]
+                assert mapped_link["content"][1]["uri"].startswith("ninfer-video:///tmp/")
+                assert urllib.parse.unquote(mapped_link["content"][1]["uri"].removeprefix(
+                    "ninfer-video://").split("?", 1)[0]) == str(path)
+                assert "frame=0" in mapped_link["content"][1]["uri"]
+            specific = call("get_video_metadata", {"path": "C:\\Host Videos\\Special\\" + path.name})
+            assert specific["structuredContent"]["path"] == str(mapped_dir / path.name)
+            for reference in ("D:\\Host Videos\\demo.mp4", "C:\\Host Videos-other\\demo.mp4"):
+                assert call("get_video_metadata", {"path": reference})["isError"]
+            escaped = call("get_video_metadata", {"path": "C:\\Host Videos\\escape.mp4"})
+            assert escaped["isError"] and "path_outside_root" in escaped["content"][0]["text"]
+            assert call("get_video_metadata", {"path": "C:\\Host Videos\\..\\outside.mp4"})["isError"]
             link = call("inspect_video", {"path": str(path), "instruction": "Identify color",
                 "start_frame": 1, "end_frame": 4, "skip_frame": 1,
                 "bbox": {"x": 0, "y": 0, "width": 32, "height": 24}, "scale": 0.5})

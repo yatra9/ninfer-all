@@ -11,7 +11,7 @@
           "path": {
             "type": "string",
             "minLength": 1,
-            "description": "Absolute local video file path visible to NInfer (inside the container when applicable), such as /videos/demo.mp4. URIs and relative paths are not accepted. Do not append query options; use the separate selection arguments."
+            "description": "Absolute local video file path, such as /videos/demo.mp4, or a Windows/POSIX host path covered by --reference-path-map. Mapped paths are authorized beneath local-media-root; returned native URIs use container paths. URIs and relative paths are not accepted. Use separate selection arguments instead of query options."
           },
           "instruction": {
             "type": "string",
@@ -101,7 +101,7 @@
           "path": {
             "type": "string",
             "minLength": 1,
-            "description": "Local video path visible to NInfer. Accept a normal local path"
+            "description": "Absolute local video path visible to NInfer, or a Windows/POSIX host path covered by --reference-path-map. URIs and relative paths are not accepted."
           }
         },
         "required": [
@@ -218,7 +218,7 @@
           "path": {
             "type": "string",
             "minLength": 1,
-            "description": "Local video path visible to NInfer."
+            "description": "Absolute local video path visible to NInfer, or a Windows/POSIX host path covered by --reference-path-map. URIs and relative paths are not accepted."
           },
           "time_seconds": {
             "type": "number",

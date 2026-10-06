@@ -325,3 +325,12 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - Dockerfileの既定ninfer-serve CMDへ --local-media-root /videos を追加。動画ディレクトリを/videosへmountして起動するとnative動画入力とMCP動画toolsが利用できる。
 - CMDのJSON配列をPowerShellでparseし、引数と値を確認。git diff --checkと変更diff reviewを実施。image rebuild/起動検証は今回の既定引数追加では実行していない。
 - 次の作業なし。利用時は/videosへの動画ディレクトリmountが必要。
+
+### 追加実装: host reference path mapping完了
+
+- --reference-path-map HOST_DIR CONTAINER_DIRをrepeatableなninfer-serve引数として追加。MCPの3 tools共通でhost Windows drive/backslash UNC/POSIX絶対pathを変換する。Windows ASCII caseとseparator差を考慮、component境界と最深mapを優先、dot/重複separatorを正規化。重複host mappingと不正設定は起動時拒否。残りのfilenameの綴りを保持し、非ASCII case folding/device pathは対象外。
+- 変換後に既存canonical local-media-root認可を実行。metadataのpathとinspect resource URIはcontainer path。mapはmount作成やroot認可拡張を行わず、OpenAI native-video URIは引き続きcontainer pathを使用する。SPEC/schema/serving guide/command helpを更新。
+- 従来のninfer-all:build/:devとninfer-all-devが削除されていたため、WSLC BuildKit cacheからbuild stageとdev image/containerを復元。baselineは /build/686c96faa22541ca0074bacfa46b09ea921869de8ec4799e10e1c457cc481da4。既存CUDA生成物を再利用し、ninfer-serve/serve_options_test/video_mcp_http_fixtureのCPU増分build成功。
+- CLIとMCP実HTTPのCTest 2/2成功（17.94秒）。Windows/UNC/POSIX入力、複数map/最深一致、case/separator差、日本語・予約文字、duplicate/relative/missing argument拒否、URIのcontainer path一致、symlink root外拒否を検証。既存HTTP/schema/session/frame/timing/cancel回帰も含む。
+- GPU非公開containerではCLI testのlibcuda.so.1ロードに失敗したため、CUDA SDKのdriver stubを/tmp/video-mcp-cuda-stubへsymlinkし、CPU test commandのLD_LIBRARY_PATHだけに設定して成功。GPU実行・モデルロードは行っていない。Python3.12.3は既存WSLC fixture interpreterの確認済み例外。build unknown表示はrsync sourceの既知の制限。
+- 完全diff reviewとgit diff --check成功。GPU実model/OpenCode E2Eは再実行していない。開発containerは保持。実装完了、判断待ち・次の実装作業なし。運用イメージninfer-all:latestへの反映には通常のwslc build -t ninfer-all .を実行する。

@@ -30,6 +30,40 @@ ServeOptions parse(std::vector<std::string> arguments) {
 
 int main() {
     int failures = 0;
+    const auto mapped = parse({"ninfer-serve", "model.ninfer",
+        "--reference-path-map", "C:\\Videos\\", "/videos",
+        "--reference-path-map", "c:/videos/special", "/special",
+        "--reference-path-map", "/home/user/Videos", "/linux",
+        "--reference-path-map", "\\\\Server\\Share", "/network"});
+    const auto& maps = mapped.reference_path_maps;
+    failures += check(maps.translate("c:/VIDEOS/demo.mp4") == "/videos/demo.mp4", "Windows case/separator mapping failed");
+    failures += check(maps.translate("C://VIDEOS/./demo.mp4") == "/videos/demo.mp4", "repeated Windows separator failed");
+    failures += check(maps.translate("C:\\videos\\special\\demo.mp4") == "/special/demo.mp4", "longest mapping failed");
+    failures += check(maps.translate("C:\\videos\\special\\..\\demo.mp4") == "/videos/demo.mp4", "dot normalization failed");
+    failures += check(maps.translate("/home/user/Videos/demo.mp4") == "/linux/demo.mp4", "POSIX mapping failed");
+    failures += check(maps.translate("/home/user/videos/demo.mp4") == "/home/user/videos/demo.mp4", "POSIX mapping ignored case");
+    failures += check(maps.translate("/home/user/Videos-other/demo.mp4") == "/home/user/Videos-other/demo.mp4", "partial directory matched");
+    failures += check(maps.translate("\\\\server\\SHARE\\dir\\demo.mp4") == "/network/dir/demo.mp4", "UNC mapping failed");
+    failures += check(maps.translate("/videos/file\\name.mp4") == "/videos/file\\name.mp4", "POSIX backslash was changed");
+    for (const auto& args : std::vector<std::vector<std::string>>{
+        {"--reference-path-map"}, {"--reference-path-map", "C:\\Videos"},
+        {"--reference-path-map", "relative", "/videos"},
+        {"--reference-path-map", "C:Videos", "/videos"},
+        {"--reference-path-map", "C:\\Videos", "relative"},
+        {"--reference-path-map", "C:\\Videos", "D:\\Videos"},
+        {"--reference-path-map", "C:\\Videos", "/videos", "--reference-path-map", "c:/VIDEOS/", "/other"}}) {
+        auto argv = std::vector<std::string>{"ninfer-serve", "model.ninfer"};
+        argv.insert(argv.end(), args.begin(), args.end());
+        bool rejected = false;
+        try { (void)parse(argv); } catch (const std::invalid_argument&) { rejected = true; }
+        failures += check(rejected, "invalid reference path map accepted");
+    }
+    for (const char* input : {"relative.mp4", "C:demo.mp4", "D:\\Videos\\demo.mp4",
+                              "C:\\Videos-other\\demo.mp4", "\\\\?\\C:\\demo.mp4"}) {
+        bool rejected = false;
+        try { (void)maps.translate(input); } catch (const std::invalid_argument&) { rejected = true; }
+        failures += check(rejected, "invalid/unmapped reference path accepted");
+    }
     const auto local_video =
         parse({"ninfer-serve", "model.ninfer", "--local-media-root", "/videos"});
     failures += check(local_video.local_media_root == "/videos",

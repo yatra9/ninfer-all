@@ -90,6 +90,7 @@ Json tool_error(const std::string& code, const std::string& message) {
 
 struct VideoMcpServer::Impl {
     std::filesystem::path root;
+    ReferencePathMaps path_maps;
     std::string host;
     std::shared_ptr<spdlog::logger> logger;
     Json tools = Json::parse(video_mcp_schema)["tools"];
@@ -101,8 +102,8 @@ struct VideoMcpServer::Impl {
     fastmcpp::server::HostOriginGuard guard;
     fastmcpp::server::StreamableHttpServerWrapper transport;
 
-    Impl(std::filesystem::path r, std::string h, std::shared_ptr<spdlog::logger> log)
-        : root(std::move(r)), host(std::move(h)), logger(std::move(log)),
+    Impl(std::filesystem::path r, std::string h, std::shared_ptr<spdlog::logger> log, ReferencePathMaps maps)
+        : root(std::move(r)), path_maps(std::move(maps)), host(std::move(h)), logger(std::move(log)),
           guard(fastmcpp::server::HostOriginGuardOptions{
               .mode = fastmcpp::server::HostOriginProtectionMode::Strict,
               .allowed_hosts = std::vector<std::string>{"localhost", "127.0.0.1", "::1",
@@ -111,10 +112,10 @@ struct VideoMcpServer::Impl {
 
     Json call(const std::string& name, const Json& args, const lv::Options& options) {
         const auto text = args.at("path").get<std::string>();
-        if (text.find("://") != std::string::npos || text.find('\0') != std::string::npos ||
-            !std::filesystem::path(text).is_absolute())
-            throw ToolError("invalid_path", "Use an absolute local path, not a URI");
-        const auto path = url::authorize_local_path(text, root);
+        std::string translated;
+        try { translated = path_maps.translate(text); }
+        catch (const std::invalid_argument& e) { throw ToolError("invalid_path", e.what()); }
+        const auto path = url::authorize_local_path(translated, root);
         options.checkpoint();
         const auto source = sources->acquire(path, options);
         struct Diagnostics {
@@ -277,8 +278,8 @@ struct VideoMcpServer::Impl {
     }
 };
 VideoMcpServer::VideoMcpServer(std::filesystem::path root, std::string host,
-                               std::shared_ptr<spdlog::logger> logger)
-    : impl_(std::make_unique<Impl>(std::move(root), std::move(host), std::move(logger))) {}
+                               std::shared_ptr<spdlog::logger> logger, ReferencePathMaps path_maps)
+    : impl_(std::make_unique<Impl>(std::move(root), std::move(host), std::move(logger), std::move(path_maps))) {}
 VideoMcpServer::~VideoMcpServer() { stop(); }
 void VideoMcpServer::register_routes(httplib::Server& server) { impl_->transport.register_routes(server); }
 void VideoMcpServer::stop() { impl_->stopping.store(true); }

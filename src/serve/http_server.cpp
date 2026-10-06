@@ -454,7 +454,8 @@ httplib::Server::HandlerResponse HttpServer::pre_route(const httplib::Request& r
 
 void HttpServer::register_routes() {
 #ifdef NINFER_VIDEO_MCP
-    video_mcp_ = std::make_unique<VideoMcpServer>(options_.local_media_root, options_.host, video_mcp_logger_);
+    video_mcp_ = std::make_unique<VideoMcpServer>(options_.local_media_root, options_.host, video_mcp_logger_,
+                                               options_.reference_path_maps);
     video_mcp_->register_routes(server_);
 #endif
     server_.set_error_handler([this](const httplib::Request& request, httplib::Response& response) {

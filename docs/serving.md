@@ -1365,6 +1365,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--vision-cpu` | `--vision` with `--vision-residency cpu` | off |
 | `--vision-max-merged N` | merged-token budget of one media item, `[64, 16384]`; larger images and video frame pairs are downscaled at preprocessing instead of being rejected, and the overlay window is sized for it | 16384 |
 | `--local-media-root PATH` | enable `ninfer-video` URLs for canonical regular files beneath this absolute container path | disabled |
+| `--reference-path-map HOST_DIR CONTAINER_DIR` | translate host paths in MCP video tools; repeatable, deepest directory match wins; Windows drive/backslash UNC or POSIX source, POSIX destination | none |
 | `--local-video-max-tokens N` | aggregate merged-token budget for one request's indexed local videos, `[1, 98304]`; each execution chunk remains bounded by `--vision-max-merged` | 98304 |
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
 | `--cuda-graph-allowance-mib N` | total CUDA Graph driver-state allowance in MiB, subtracted from the KV sizing budget | computed |
@@ -1815,7 +1816,7 @@ without completing initialization, or 30 minutes idle after initialization.
 Active tool calls retain their session until completion. Expired session IDs
 return HTTP 404; initialize again to reconnect. Configure `--local-media-root /videos`
 to enable `get_video_metadata`, `resolve_video_time`, and `inspect_video`. Each tool
-accepts an absolute local file path visible inside the container; selection options
+accepts an absolute container path or a host path covered by --reference-path-map; selection options
 are separate tool arguments. Discovery remains available without a media root.
 The same source metadata/index cache is shared with native video inference.
 
@@ -1845,3 +1846,26 @@ shutdown cancel probe/index work. Decoded video frames are not retained by this 
 Full paths and generated URIs should only be inspected in debug logs.
 
 The rebuilt patched executable passed same-agent native-video E2E on 2026-10-06: frames 2–3 of a neutral-name red/blue fixture were identified as blue and frames 0–1 as red. Each inspect resource link became a video_url in that agent's next model request. See [acceptance evidence](../tools/video-mcp-dev/ACCEPTANCE.md). Direct inference, authentication and tools while the model is suspended also passed.
+
+MCP tools can also accept host paths through repeated mappings:
+
+```text
+--local-media-root /videos
+--reference-path-map "C:\Users\koji\Videos" /videos
+--reference-path-map /home/koji/videos /videos
+```
+
+These options translate the `path` argument of all three MCP video tools. Mount the
+host directories separately. Matching uses directory components and the deepest
+matching host directory; duplicate host roots are rejected. Windows drive paths
+accept either separator and match ASCII letters without regard to case. Backslash
+UNC paths such as `\\server\share\videos` are supported. POSIX paths distinguish
+case and preserve backslashes as filename characters. Dot components are normalized
+before matching. Remaining filename components retain their input spelling and
+must match the names in the container. Windows Unicode case folding and device
+paths are not supported.
+
+Unmatched POSIX paths are used directly; unmatched Windows paths are rejected.
+After translation, the canonical file must still be beneath `--local-media-root`,
+including symlink checks. Metadata paths and native resource URIs contain the
+container path. OpenAI native-video URIs continue to use container paths directly.

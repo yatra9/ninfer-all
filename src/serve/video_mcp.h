@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <httplib.h>
+#include "serve/reference_path_map.h"
 namespace spdlog { class logger; }
 
 namespace ninfer::serve {
@@ -10,7 +11,7 @@ namespace ninfer::serve {
 class VideoMcpServer {
 public:
     explicit VideoMcpServer(std::filesystem::path root, std::string host,
-                            std::shared_ptr<spdlog::logger> logger = {});
+                            std::shared_ptr<spdlog::logger> logger = {}, ReferencePathMaps path_maps = {});
     ~VideoMcpServer();
     void register_routes(httplib::Server& server);
     bool reject_request(const httplib::Request& request, httplib::Response& response) const;

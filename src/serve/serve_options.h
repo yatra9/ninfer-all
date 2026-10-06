@@ -3,6 +3,7 @@
 #include "ninfer/types.h"
 #include "product/logging/logging.h"
 #include "serve/request.h"
+#include "serve/reference_path_map.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -58,6 +59,7 @@ struct ServeOptions {
     std::uint32_t media_preprocess_threads = 0;
     // Empty disables ninfer-video. Requests are canonicalized beneath this root before opening.
     std::filesystem::path local_media_root;
+    ReferencePathMaps reference_path_maps;
     std::uint32_t local_video_max_tokens = 98'304;
     std::size_t response_store_max_records = kDefaultResponseStoreRecords;
     std::size_t response_store_max_bytes   = kDefaultResponseStoreBytes;
