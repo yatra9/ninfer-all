@@ -14,6 +14,7 @@
 -   圧縮動画ファイル全体をホストメモリへ読み込まない。
 -   サンプリング対象となった全 RGB フレームをメモリ上に保持しない。
 -   指定されたフレーム範囲のみを処理する。
+-   `frame=N` により1枚だけ選択し、Qwen3.8 Vision Encoder へ画像として入力する。
 -   `start_frame`、`end_frame`、`skip_frame`
     によって決定論的にフレームを選択する。
 -   crop、scale、デインタレースをサポートする。自動色調補正は将来拡張として予約する。
@@ -156,6 +157,30 @@ ninfer-video:///mnt/d/video.mp4
 &autotone=0
 &deinterlace=auto
 ```
+
+### 5.0 `frame` — 単一フレーム画像モード
+
+```text
+ninfer-video:///mnt/d/videos/example.mp4?frame=100
+ninfer-video:///mnt/d/videos/example.mp4?frame=100&bbox=320,180,640,360&scale=1.5&deinterlace=auto
+```
+
+`frame` は表示順に数えた0始まりの source frame index。非負の64-bit整数のみを受け付ける。
+`start_frame`、`end_frame`、`skip_frame` との同時指定は、明示した値が既定値でも拒否する。
+その他の既存オプションとの同時指定は可能（`autotone` は引き続き `0` / `false` のみ）。
+存在しないフレームはエラーとし、近いフレームへの置換はしない。
+
+OpenAI互換APIの外側の content type は引き続き `video_url`。
+サーバーがこのモードを解析し、選択された1フレームを **画像の modality** として渡す。
+画像用 `<|vision_start|><|image_pad|>…<|vision_end|>`、画像用位置情報、temporal grid=1を使用し、
+動画用 timestamp テキストや `<|video_pad|>` は生成しない。
+Qwenの画像patch形式に従い、同じRGB画像を2つのtemporal patch slotへ複製する。
+`start_frame=N&end_frame=N` は従来どおり動画モードであり、この画像モードと同一ではない。
+
+既存のroot認可、source/index cache、seek、decode、deinterlace→crop→scale→32-pixel alignment、
+chunk payload account、Vision容量・`--local-video-max-tokens` 上限をそのまま使用する。
+画像モードでも指定geometryを勝手に縮小しない。source PTSは診断情報に保持するがpromptへ挿入しない。
+以降のtimestamp付き動画promptの説明・疑似コードは `frame` を省略した範囲モードに適用する。
 
 ### 5.1 `start_frame`
 
@@ -494,6 +519,7 @@ struct CropRect {
 
 struct LocalVideoSpec {
     std::filesystem::path path;
+    std::optional<std::int64_t> frame; // 単一フレーム画像モード。range指定と排他。
 
     std::int64_t start_frame = 0;
     std::optional<std::int64_t> end_frame;

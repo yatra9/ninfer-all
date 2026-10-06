@@ -194,6 +194,7 @@ ninfer::OwnedMedia acquire_media(const ContentPart& part, Clock::time_point dead
             media.source_name = spec.path.string();
             ninfer::OwnedLocalVideo local;
             local.path        = std::move(spec.path);
+            local.frame       = spec.frame;
             local.start_frame = spec.start_frame;
             local.end_frame   = spec.end_frame;
             local.skip_frame  = spec.skip_frame;

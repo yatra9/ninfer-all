@@ -22,6 +22,7 @@
 #include <thread>
 
 namespace ninfer::serve {
+class VideoMcpServer;
 
 void write_openai_error(httplib::Response& response, const ApiError& error);
 void write_anthropic_error(httplib::Response& response, const ApiError& error,
@@ -164,6 +165,10 @@ private:
     JsonlRequestLog request_jsonl_;
     ServeMetrics metrics_;
     std::unique_ptr<ConsoleStatsPanel> console_stats_;
+#ifndef _WIN32
+    std::unique_ptr<VideoMcpServer> video_mcp_;
+    std::shared_ptr<spdlog::logger> video_mcp_logger_;
+#endif
     httplib::Server server_;
     // Present only with --stats-port.
     httplib::Server stats_server_;

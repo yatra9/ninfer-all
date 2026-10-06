@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "enabled_providers": ["opencode-ninfer"],
+  "provider": {
+    "opencode-ninfer": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NInfer",
+      "options": {"baseURL": "http://127.0.0.1:18081/v1", "apiKey": "video-mcp-test"},
+      "models": {
+        "qwen3.8-27b": {
+          "name": "Qwen3.8-27B", "attachment": true, "tool_call": true,
+          "limit": {"context": 8192, "output": 1024},
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]}
+        }
+      }
+    }
+  },
+  "model": "opencode-ninfer/qwen3.8-27b",
+  "mcp": {
+    "ninfer-video": {
+      "type": "remote", "url": "http://127.0.0.1:18081/mcp", "enabled": true,
+      "headers": {"Authorization": "Bearer video-mcp-test"}
+    }
+  },
+  "agent": {
+    "video-check": {
+      "description": "Native video acceptance agent", "mode": "primary", "temperature": 0, "steps": 4,
+      "prompt": "You inspect videos with the supplied MCP tools. Call inspect_video to see the selected frames before answering. Determine colors from visual input, never filenames. Follow the requested frame selection exactly.",
+      "permission": {"*": "deny", "ninfer-video_*": "allow"}
+    },
+    "title": {"disable": true},
+    "summary": {"disable": true}
+  }
+}

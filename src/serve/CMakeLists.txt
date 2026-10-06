@@ -1,3 +1,15 @@
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_subdirectory("${PROJECT_SOURCE_DIR}/third_party/fastmcpp" "${CMAKE_CURRENT_BINARY_DIR}/fastmcpp")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/mcp/tool-schema.json")
+  file(READ "${PROJECT_SOURCE_DIR}/mcp/tool-schema.json" NINFER_VIDEO_TOOL_SCHEMA)
+  configure_file(video_mcp_schema.h.in video_mcp_schema.h @ONLY)
+  add_library(ninfer_video_mcp STATIC video_mcp.cpp)
+  ninfer_internal_includes(ninfer_video_mcp)
+  target_include_directories(ninfer_video_mcp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+  target_link_libraries(ninfer_video_mcp PUBLIC ninfer::httplib PRIVATE
+    ninfer_mcp_transport ninfer_local_video ninfer_local_video_url ninfer::json spdlog::spdlog)
+endif()
+
 add_library(ninfer_serve STATIC
   http_transport.cpp
   console_log.cpp
@@ -32,6 +44,10 @@ target_link_libraries(ninfer_serve
   PUBLIC ninfer_engine Threads::Threads ninfer::json ninfer::httplib
   PRIVATE ninfer_media_acquire ninfer_local_video_url ninfer_product_logging ninfer_product_prompt_input
           ${NINFER_CUDART_TARGET})
+if(TARGET ninfer_video_mcp)
+  target_link_libraries(ninfer_serve PRIVATE ninfer_video_mcp)
+  target_compile_definitions(ninfer_serve PRIVATE NINFER_VIDEO_MCP=1)
+endif()
 
 # A WebUI is compiled in only from a local directory, never downloaded at configure time, so offline
 # and hermetic builds are unaffected. scripts/fetch-webui.sh unpacks llama.cpp's released WebUI into

@@ -143,7 +143,10 @@ LocalVideoSpec parse_local_video_url(std::string_view value) {
             throw std::invalid_argument("duplicate ninfer-video parameter: " + name);
         }
         const std::string_view parameter(decoded);
-        if (name == "start_frame") {
+        if (name == "frame") {
+            result.frame = integer(name, parameter);
+            if (*result.frame < 0) { throw std::invalid_argument("frame must be nonnegative"); }
+        } else if (name == "start_frame") {
             result.start_frame = integer(name, parameter);
             if (result.start_frame < 0) { throw std::invalid_argument("start_frame must be nonnegative"); }
         } else if (name == "end_frame") {
@@ -178,6 +181,10 @@ LocalVideoSpec parse_local_video_url(std::string_view value) {
         value.remove_prefix(amp + 1);
         if (value.empty()) { throw std::invalid_argument("ninfer-video query contains an empty parameter"); }
     }
+    if (result.frame && (seen.contains("start_frame") || seen.contains("end_frame") ||
+                         seen.contains("skip_frame"))) {
+        throw std::invalid_argument("frame cannot be combined with start_frame, end_frame or skip_frame");
+    }
     if (result.end_frame && *result.end_frame < result.start_frame) {
         throw std::invalid_argument("end_frame must be >= start_frame");
     }
@@ -207,6 +214,47 @@ std::filesystem::path authorize_local_path(const std::filesystem::path& requeste
                         "local video path is not a regular file");
     }
     return path;
+}
+
+std::string build_local_video_url(const LocalVideoSpec& spec) {
+    if (spec.frame && (spec.start_frame != 0 || spec.end_frame || spec.skip_frame != 0))
+        throw std::invalid_argument("frame cannot be combined with start_frame, end_frame or skip_frame");
+    if (!spec.path.is_absolute()) throw std::invalid_argument("local video path must be absolute");
+    std::string result(kScheme);
+    constexpr char digits[]="0123456789ABCDEF";
+    for (const unsigned char c:spec.path.generic_string()) {
+        if ((c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9') ||
+            c=='/' || c=='-' || c=='_' || c=='.' || c=='~') result+=char(c);
+        else { result+='%'; result+=digits[c>>4]; result+=digits[c&15]; }
+    }
+    char separator='?';
+    const auto add=[&](std::string_view name,const std::string& value) {
+        result+=separator; separator='&'; result+=name; result+='='; result+=value;
+    };
+    if (spec.frame) add("frame",std::to_string(*spec.frame));
+    if (spec.start_frame!=0) add("start_frame",std::to_string(spec.start_frame));
+    if (spec.end_frame) add("end_frame",std::to_string(*spec.end_frame));
+    if (spec.skip_frame!=0) add("skip_frame",std::to_string(spec.skip_frame));
+    if (spec.bbox) {
+        const auto& b=*spec.bbox;
+        add("bbox",std::to_string(b.x)+","+std::to_string(b.y)+","+
+                   std::to_string(b.width)+","+std::to_string(b.height));
+    }
+    if (spec.scale!=1) {
+        std::array<char,64> buffer;
+        const auto encoded=std::to_chars(buffer.data(),buffer.data()+buffer.size(),spec.scale);
+        if (encoded.ec!=std::errc{}) throw std::invalid_argument("scale could not be encoded");
+        add("scale",std::string(buffer.data(),encoded.ptr));
+    }
+    switch (spec.deinterlace) {
+    case DeinterlaceMode::Auto: break;
+    case DeinterlaceMode::On: add("deinterlace","on"); break;
+    case DeinterlaceMode::Off: add("deinterlace","off"); break;
+    default: throw std::invalid_argument("invalid deinterlace mode");
+    }
+    if (spec.autotone) throw std::invalid_argument("autotone is not supported");
+    (void)parse_local_video_url(result);
+    return result;
 }
 
 } // namespace ninfer::product::local_video

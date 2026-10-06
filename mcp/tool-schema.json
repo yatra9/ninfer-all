@@ -1,0 +1,302 @@
+{
+  "tools": [
+    {
+      "name": "inspect_video",
+      "title": "Inspect video",
+      "description": "Visually inspect a local video through NInfer native visual input. With frame=N, you (the AI) yourself can see the image of that exact source frame, sent back to the same agent as image input. Otherwise selected frames are sent as video input. Selection uses 0-based source frame numbers. frame cannot be combined with start_frame, end_frame or skip_frame. Use start_frame/end_frame for a range, skip_frame for temporal sampling, bbox for cropping, scale for magnification/reduction, and deinterlace when needed. Spatial options can also be used with frame.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Absolute local video file path visible to NInfer (inside the container when applicable), such as /videos/demo.mp4. URIs and relative paths are not accepted. Do not append query options; use the separate selection arguments."
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What to visually inspect or determine from the selected video frames."
+          },
+          "frame": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "See one exact source frame as an image yourself (0-based index). Mutually exclusive with start_frame, end_frame and skip_frame, including their default values. Other options may be combined."
+          },
+          "start_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "First source frame to inspect, using 0-based source frame numbering. Omit to start from the beginning."
+          },
+          "end_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Last source frame to inspect, using 0-based source frame numbering. Omit to continue to the end."
+          },
+          "skip_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0,
+            "description": "Number of source frames skipped between selected frames. 0 = every frame, 1 = every second frame, 2 = every third frame. Use a larger value for coarse inspection of long videos."
+          },
+          "scale": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Spatial scale applied before frames are sent to the model. Example: 0.5 halves width and height; 2.0 doubles them."
+          },
+          "bbox": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Optional crop rectangle in source-video pixel coordinates. Crop first, then use scale if the cropped area needs magnification.",
+            "properties": {
+              "x": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "y": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ]
+          },
+          "deinterlace": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "on",
+              "off"
+            ],
+            "default": "auto",
+            "description": "Deinterlacing mode. Use auto unless the source is known to require a specific setting."
+          }
+        },
+        "required": [
+          "path",
+          "instruction"
+        ]
+      }
+    },
+    {
+      "name": "get_video_metadata",
+      "title": "Get video metadata",
+      "description": "Read technical metadata from the actual local video: source dimensions, duration, frame count when known, frame-rate characteristics (including CFR/VFR), audio presence, and interlace information. Do not infer values from the filename.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Local video path visible to NInfer. Accept a normal local path"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Decoded source frame width in pixels before any ninfer-video crop or scale."
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Decoded source frame height in pixels before any ninfer-video crop or scale."
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Video duration in seconds."
+          },
+          "frame_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Total number of decoded source video frames when known exactly. Return null rather than inventing an exact count when the container/decoder cannot determine it cheaply or reliably."
+          },
+          "frame_count_exact": {
+            "type": "boolean",
+            "description": "True only when frame_count is known to be exact."
+          },
+          "average_fps": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "exclusiveMinimum": 0,
+            "description": "Average source frame rate when available. This is descriptive only and must not be used to map timestamps to frame numbers for VFR input."
+          },
+          "nominal_fps": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "exclusiveMinimum": 0,
+            "description": "Nominal/reported stream frame rate when available."
+          },
+          "variable_frame_rate": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "True when the video is determined to be VFR, false when determined CFR, null when it cannot be determined reliably."
+          },
+          "has_audio": {
+            "type": "boolean",
+            "description": "Whether at least one audio stream is present."
+          },
+          "audio_stream_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "interlace_mode": {
+            "type": "string",
+            "enum": [
+              "progressive",
+              "interlaced",
+              "mixed",
+              "unknown"
+            ],
+            "description": "Observed interlace state. mixed means progressive and interlaced frames/segments are both present."
+          },
+          "field_order": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reported/observed field order when known, such as tff or bff; null when not applicable or unknown."
+          }
+        },
+        "required": [
+          "width",
+          "height",
+          "duration_seconds",
+          "frame_count",
+          "frame_count_exact",
+          "average_fps",
+          "nominal_fps",
+          "variable_frame_rate",
+          "has_audio",
+          "audio_stream_count",
+          "interlace_mode",
+          "field_order"
+        ]
+      }
+    },
+    {
+      "name": "resolve_video_time",
+      "title": "Resolve video time to frames",
+      "description": "Resolve one timestamp to actual 0-based source-frame numbers using the video's real frame timestamps. Primarily use for VFR video or when exact time-to-frame mapping matters. Returns the nearest frame and nearby frames so a caller can choose a robust start or end boundary. For confirmed CFR video with known fixed FPS, frame numbers can usually be computed directly from FPS instead.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Local video path visible to NInfer."
+          },
+          "time_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Target time in seconds relative to source frame 0's presentation timestamp, which is defined as 0 seconds. Fractional values are allowed."
+          },
+          "radius_frames": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16,
+            "default": 2,
+            "description": "Number of neighboring source frames to return on each side of the frame nearest time_seconds. Default 2 returns up to five frames total: two before, nearest, and two after. This helps choose a robust start/end boundary around the requested timestamp."
+          }
+        },
+        "required": [
+          "path",
+          "time_seconds"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "requested_time_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "nearest_frame_number": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0-based source frame number whose actual timestamp is nearest the requested time."
+          },
+          "nearest_timestamp_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Actual presentation timestamp of nearest_frame_number in seconds relative to source frame 0."
+          },
+          "frames": {
+            "type": "array",
+            "description": "Nearby frames ordered by increasing frame_number. At video boundaries fewer than 2*radius_frames+1 frames may be returned.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "frame_number": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "0-based source frame number."
+                },
+                "timestamp_seconds": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Actual presentation timestamp of this source frame in seconds relative to source frame 0."
+                },
+                "delta_seconds": {
+                  "type": "number",
+                  "description": "timestamp_seconds - requested_time_seconds. Negative means before the requested time; positive means after."
+                },
+                "is_nearest": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "frame_number",
+                "timestamp_seconds",
+                "delta_seconds",
+                "is_nearest"
+              ]
+            }
+          }
+        },
+        "required": [
+          "requested_time_seconds",
+          "nearest_frame_number",
+          "nearest_timestamp_seconds",
+          "frames"
+        ]
+      }
+    }
+  ]
+}

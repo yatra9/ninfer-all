@@ -813,6 +813,14 @@ selected frame and skips the next N. `bbox=x,y,width,height` crops before `scale
 duplicate or unknown query fields are rejected, and paths must be percent-encoded when they contain
 reserved URL characters.
 
+Use `ninfer-video:///videos/example.mp4?frame=100` to view one exact 0-based source frame
+as an image. `frame` cannot be combined with `start_frame`, `end_frame`, or `skip_frame`,
+even when explicitly set to defaults. Crop, scale and deinterlace remain available.
+The API content stays `video_url`; NInfer produces image tokens and image position information
+for Qwen3.8, without video timestamps. The same decoded RGB image fills both temporal patch slots.
+Existing geometry, local-video token and live-memory limits still apply; missing frames are errors.
+The PowerShell helper supports this mode with `-Frame 100`.
+
 The repository includes a PowerShell client for manual tests. It builds the URL, sends a
 non-streaming Chat Completions request, and prints the answer, optional reasoning, finish reason,
 and token usage:
@@ -1799,3 +1807,41 @@ use [structured output](#structured-output).
 
 Prompt-token usage includes chat-template and expanded media tokens. Generated-token usage comes
 from accepted output token IDs, including a stop token whose decoded text may be withheld.
+
+## Native video MCP (Linux / WSLC)
+
+The existing HTTP listener also serves `/mcp`. Sessions expire after 60 seconds
+without completing initialization, or 30 minutes idle after initialization.
+Active tool calls retain their session until completion. Expired session IDs
+return HTTP 404; initialize again to reconnect. Configure `--local-media-root /videos`
+to enable `get_video_metadata`, `resolve_video_time`, and `inspect_video`. Each tool
+accepts an absolute local file path visible inside the container; selection options
+are separate tool arguments. Discovery remains available without a media root.
+The same source metadata/index cache is shared with native video inference.
+
+MCP uses Streamable HTTP (2025-11-25 or 2025-06-18): POST returns JSON, GET returns
+405, and DELETE closes a session. Send the negotiated `MCP-Protocol-Version` and
+`Mcp-Session-Id` after initialize and send `notifications/initialized` before tools.
+Existing API-key authentication applies. MCP validates Host and browser Origin;
+loopback access and an explicitly bound host are accepted. Keep reverse-proxy Host
+and Origin consistent with that address. `/cors-proxy` remains the separate WebUI relay.
+
+`inspect_video` returns instruction text and a `ninfer-video://` resource link for
+the same agent's next model call. Its MIME is `video/mp4` as a compatibility tag
+for the supplied OpenCode native-video patch, including MKV sources; it serves no
+MP4 download and does not transcode the source. FFmpeg detects the actual source
+format. OpenCode must use the supplied patched executable and the
+`opencode-ninfer` provider with NInfer's `/v1` base URL.
+
+`inspect_video` also accepts `frame=100`: you (the AI) yourself can see that source frame's
+image in the next model call. This argument excludes all three range/sampling arguments;
+spatial options remain available. Its resource link keeps the `video/mp4` compatibility tag.
+The existing patched OpenCode executable forwards the URI unchanged and needs no modification.
+
+Tools use CPU-only video processing, including while the model is suspended.
+Four concurrent tool calls, a 120-second checkpoint deadline, two million indexed
+frames and 64 Mi output pixels bound resource use. Cancellation notifications and
+shutdown cancel probe/index work. Decoded video frames are not retained by this cache.
+Full paths and generated URIs should only be inspected in debug logs.
+
+The rebuilt patched executable passed same-agent native-video E2E on 2026-10-06: frames 2–3 of a neutral-name red/blue fixture were identified as blue and frames 0–1 as red. Each inspect resource link became a video_url in that agent's next model request. See [acceptance evidence](../tools/video-mcp-dev/ACCEPTANCE.md). Direct inference, authentication and tools while the model is suspended also passed.

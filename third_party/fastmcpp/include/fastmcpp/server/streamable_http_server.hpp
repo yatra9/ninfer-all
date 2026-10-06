@@ -1,0 +1,213 @@
+#pragma once
+#include "fastmcpp/server/host_origin_guard.hpp"
+#include "fastmcpp/server/session.hpp"
+#include "fastmcpp/types.hpp"
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <httplib.h>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace fastmcpp::server
+{
+
+/**
+ * Streamable HTTP MCP server wrapper.
+ *
+ * This transport implements the Streamable HTTP protocol for MCP communication
+ * per MCP spec version 2025-03-26:
+ * - Single POST endpoint (default: /mcp)
+ * - Session ID management via Mcp-Session-Id header
+ * - Responses can be JSON or SSE stream
+ *
+ * This is a simpler transport than SSE with a single endpoint.
+ * Clients send JSON-RPC requests via POST and receive responses in the
+ * same HTTP response (either as JSON or SSE stream for long-running operations).
+ *
+ * Usage:
+ *   auto handler = fastmcpp::mcp::make_mcp_handler("myserver", "1.0.0", tools);
+ *   StreamableHttpServerWrapper server(handler);
+ *   server.start();  // Non-blocking - runs in background thread
+ *   // ... server runs ...
+ *   server.stop();   // Graceful shutdown
+ *
+ * Reference: https://spec.modelcontextprotocol.io/specification/2025-03-26/basic/transports/
+ */
+class StreamableHttpServerWrapper
+{
+  public:
+    using McpHandler = std::function<fastmcpp::Json(const fastmcpp::Json&)>;
+    using SessionClock = std::chrono::steady_clock;
+    struct SessionPolicy {
+        SessionClock::duration initialization_timeout = std::chrono::seconds(60);
+        SessionClock::duration idle_timeout = std::chrono::minutes(30);
+        std::function<SessionClock::time_point()> now = [] { return SessionClock::now(); };
+    };
+    // Configure before registering routes/starting; active handlers never expire.
+    void set_session_policy(SessionPolicy policy) {
+        if (!policy.now || policy.initialization_timeout <= SessionClock::duration::zero() ||
+            policy.idle_timeout <= SessionClock::duration::zero())
+            throw std::invalid_argument("session timeouts must be positive and clock must be provided");
+        session_policy_ = std::move(policy);
+    }
+
+    /**
+     * Construct a Streamable HTTP server with an MCP handler.
+     *
+     * @param handler Function that processes JSON-RPC requests and returns responses
+     * @param host Host address to bind to (default: "127.0.0.1")
+     * @param port Port to listen on (default: 18080)
+     *             To bind to any random available port provided by the OS use port number 0.
+     * @param mcp_path Path for the MCP POST endpoint (default: "/mcp")
+     * @param auth_token Optional auth token for Bearer authentication (empty = no auth required)
+     * @param cors_origin Optional CORS origin (shorthand for Access-Control-Allow-Origin header)
+     * @param response_headers Additional HTTP headers added to responses
+     */
+    explicit StreamableHttpServerWrapper(
+        McpHandler handler, std::string host = "127.0.0.1", int port = 18080,
+        std::string mcp_path = "/mcp", std::string auth_token = "", std::string cors_origin = "",
+        std::unordered_map<std::string, std::string> response_headers = {});
+
+    ~StreamableHttpServerWrapper();
+
+    /**
+     * Start the server in background (non-blocking).
+     *
+     * Launches a background thread that runs the HTTP server.
+     * Use stop() to terminate.
+     *
+     * @return true if server started successfully
+     */
+    /// Enable the Host/Origin request guard (DNS-rebinding protection).
+    /// Call before start(). Default Off. PYTHON REFERENCE: host_origin_protection.
+    void set_host_origin_guard(HostOriginGuardOptions options)
+    {
+        host_origin_guard_options_ = std::move(options);
+    }
+
+    bool start();
+
+    // NInfer embedding: register the existing transport handlers without creating
+    // another listener or replacing the host server's authentication/readiness policy.
+    // The wrapper must outlive all requests dispatched by this server.
+    void register_routes(httplib::Server& server);
+
+    /**
+     * Stop the server.
+     *
+     * Signals the server to stop and joins the background thread.
+     * Safe to call multiple times.
+     */
+    void stop();
+
+    /**
+     * Check if server is currently running.
+     */
+    bool running() const
+    {
+        return running_.load();
+    }
+
+    /**
+     * Get the port the server is bound to.
+     *
+     * Returns 0 before the server is bound. After start(), returns the actual port
+     * (useful when constructed with port 0 for OS-assigned ephemeral ports).
+     */
+    int port() const
+    {
+        return bound_port_.load();
+    }
+
+    /**
+     * Get the host address the server is bound to.
+     */
+    const std::string& host() const
+    {
+        return host_;
+    }
+
+    /**
+     * Get the MCP endpoint path.
+     */
+    const std::string& mcp_path() const
+    {
+        return mcp_path_;
+    }
+
+    /**
+     * Get the ServerSession for a given session ID.
+     *
+     * This allows server-initiated requests (sampling, elicitation) via
+     * the session's bidirectional transport.
+     *
+     * @param session_id The session to get
+     * @return Shared pointer to ServerSession, or nullptr if not found
+     */
+    std::shared_ptr<ServerSession> get_session(const std::string& session_id) const
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        auto it = sessions_.find(session_id);
+        if (it == sessions_.end())
+            return nullptr;
+        return it->second;
+    }
+
+    /**
+     * Get the number of active sessions.
+     */
+    size_t session_count() const
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        return sessions_.size();
+    }
+
+  private:
+    void run_server();
+    std::string generate_session_id();
+    bool check_auth(const std::string& auth_header) const;
+    void apply_additional_response_headers(httplib::Response& res) const;
+    void expire_sessions_locked();
+
+    McpHandler handler_;
+    std::string host_;
+    HostOriginGuardOptions host_origin_guard_options_{};
+    /// Set by install_host_origin_guard(); rejects a guarded request once
+    /// httplib has read its body. See host_origin_guard.hpp for why the check
+    /// cannot live entirely in the pre-routing handler.
+    HostOriginRejecter host_origin_reject_{};
+    int requested_port_;
+    std::atomic<int> bound_port_ = 0;
+    std::string mcp_path_;
+    std::string auth_token_; // Optional Bearer token for authentication
+    std::unordered_map<std::string, std::string> response_headers_;
+
+    std::unique_ptr<httplib::Server> svr_;
+    std::thread thread_;
+    std::atomic<bool> running_{false};
+
+    // Security limits
+    static constexpr size_t MAX_SESSIONS = 1000;
+
+    // Active sessions mapped by session ID
+    std::unordered_map<std::string, std::shared_ptr<ServerSession>> sessions_;
+    mutable std::mutex sessions_mutex_;
+    std::unordered_map<std::string, std::string> session_versions_;
+    std::unordered_set<std::string> initialized_sessions_;
+    struct SessionActivity {
+        SessionClock::time_point created, last_activity;
+        size_t active = 0;
+    };
+    SessionPolicy session_policy_;
+    std::unordered_map<std::string, SessionActivity> session_activity_;
+};
+
+} // namespace fastmcpp::server

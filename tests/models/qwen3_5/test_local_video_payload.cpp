@@ -71,6 +71,37 @@ void run(const std::filesystem::path& path) {
     ninfer::OwnedLocalVideo input;
     input.path = path;
     input.deinterlace = ninfer::LocalVideoDeinterlace::Off;
+    for (bool use_deadline : {false, true}) {
+        auto cache = std::make_shared<lv::VideoSourceService>(1);
+        std::promise<void> probe_locked, release_probe;
+        auto release = release_probe.get_future().share();
+        unsigned checkpoints = 0;
+        lv::Options held_options;
+        held_options.checkpoint = [&] {
+            if (++checkpoints == 2) { probe_locked.set_value(); release.wait(); }
+        };
+        auto held = std::async(std::launch::async, [&] { return cache->acquire(path, held_options); });
+        probe_locked.get_future().wait();
+        std::atomic<bool> cancelled{false};
+        ninfer::PreparationControl control{
+            .deadline = use_deadline ? std::chrono::steady_clock::now() + std::chrono::milliseconds(50)
+                                     : std::chrono::steady_clock::time_point{},
+            .cancellation = ninfer::CancellationView{[&] { return cancelled.load(); }}
+        };
+        auto pending = std::async(std::launch::async, [&] {
+            try { (void)fi::prepare_local_video_input(input, control, 24, 12, cache); }
+            catch (const ninfer::RequestError&) { return true; }
+            return false;
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        if (!use_deadline) cancelled = true;
+        expect(pending.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready,
+               "frontend acquisition honours cancellation/deadline while metadata probe is held");
+        release_probe.set_value();
+        (void)held.get();
+        expect(pending.get(), "frontend acquisition reports interrupted preparation");
+        expect(bool(cache->acquire(path)), "source cache remains usable after interrupted waiter");
+    }
     auto contended_source = std::make_shared<lv::VideoSource>(path);
     std::promise<void> index_started;
     std::promise<void> release_index;
@@ -144,7 +175,7 @@ void run(const std::filesystem::path& path) {
     expect(reused_scan_is_budget,
            "a reused index preserves the per-request scan-frame limit");
 
-    auto cancelled_source_cache = std::make_shared<fi::LocalVideoSourceCache>(1);
+    auto cancelled_source_cache = std::make_shared<lv::VideoSourceService>(1);
     std::atomic<unsigned> planning_checkpoints{0};
     bool planning_cancelled = false;
     try {
@@ -172,7 +203,7 @@ void run(const std::filesystem::path& path) {
         pixels_are_budget = error.kind() == fi::ProcessorErrorKind::BudgetExceeded;
     }
     expect(pixels_are_budget, "local decoded-pixel limit is classified as a media budget");
-    auto source_cache = std::make_shared<fi::LocalVideoSourceCache>(2);
+    auto source_cache = std::make_shared<lv::VideoSourceService>(2);
     auto payload_account = std::make_shared<fi::MediaPreprocessCache>(0, 16 * 1024 * 1024, 1,
                                                                       16 * 1024 * 1024);
     auto prepared = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,
@@ -313,6 +344,22 @@ void run(const std::filesystem::path& path) {
 
     auto repeated = fi::prepare_local_video_input(input, {}, 24, 12, source_cache,
                                                    payload_account);
+    auto single_input = input;
+    single_input.frame = 3;
+    auto single = fi::prepare_local_video_input(single_input, {}, 24, 12, source_cache,
+                                               payload_account);
+    expect(single.prompt.image && single.prompt.selected_frames.size() == 1 &&
+               single.prompt.selected_frames.front().source_index == 3 &&
+               single.prompt.chunks.size() == 1 && single.prompt.chunks.front().temporal_count == 1,
+           "single-frame mode selects exactly the requested image");
+    auto single_frames = decode_reference(single);
+    fi::LocalVideoPayloadReader single_reader(single);
+    auto single_payload = single_reader.read_chunk(0);
+    const auto image_expected = expected_payload(single, single_frames);
+    expect(std::equal(single_payload->span().begin(), single_payload->span().end(),
+                      image_expected.begin(), image_expected.end()),
+           "single-frame image repeats its pixels in both temporal patch slots");
+    single_payload.reset();
     expect(repeated.source == prepared.source,
            "a later request reuses the cached source for the unchanged path");
     expect(repeated.source->source_stats().index_builds == 1 &&

@@ -86,9 +86,9 @@ VisionItem local_video_item(const LocalVideoPromptPlan& plan) {
         throw std::invalid_argument("local video temporal grid exceeds int range");
     }
     VisionItem item;
-    item.modality = Modality::Video;
+    item.modality = plan.image ? Modality::Image : Modality::Video;
     item.grid = {static_cast<int>(plan.timestamps.size()), plan.grid_height, plan.grid_width};
-    item.timestamps = plan.timestamps;
+    if (!plan.image) item.timestamps = plan.timestamps;
     return item;
 }
 
@@ -438,7 +438,9 @@ std::size_t validate_media_inputs(std::span<ChatPart* const> parts,
     std::size_t remaining = options.max_encoded_media_bytes;
     for (const ChatPart* part : parts) {
         if (part->media.local_video) {
-            if (part->kind != ChatPartKind::Video || !part->media.bytes.empty()) {
+            const auto expected = part->media.local_video->frame ? ChatPartKind::Image
+                                                               : ChatPartKind::Video;
+            if (part->kind != expected || !part->media.bytes.empty()) {
                 throw std::invalid_argument("local video has inconsistent media storage");
             }
             continue;
@@ -873,7 +875,7 @@ EncodedChat encode_rendered_chat(const Tokenizer& tokenizer, const RenderedChat&
 
 Processor::Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& chat_template,
                      ProcessorOptions options, std::shared_ptr<MediaPreprocessCache> media_cache,
-                     std::shared_ptr<LocalVideoSourceCache> local_video_cache)
+                     std::shared_ptr<media::local_video::VideoSourceService> local_video_cache)
     : tokenizer_(tokenizer), chat_template_(chat_template), options_(std::move(options)),
       media_cache_(std::move(media_cache)), local_video_cache_(std::move(local_video_cache)) {
     if (options_.max_encoded_media_bytes == 0 || options_.max_decoded_pixels == 0 ||

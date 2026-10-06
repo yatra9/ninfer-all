@@ -55,6 +55,13 @@ void checkpoint(const Options& o) { if (o.checkpoint) o.checkpoint(); }
 struct FrameDelete { void operator()(AVFrame* p) const { av_frame_free(&p); } };
 using AvFrame = std::unique_ptr<AVFrame, FrameDelete>;
 AvFrame frame() { AvFrame f(av_frame_alloc()); if (!f) throw std::bad_alloc(); return f; }
+struct CachedStream {
+    AVCodecParameters* parameters = avcodec_parameters_alloc();
+    Info info;
+    mutable std::atomic<std::int64_t> decoder_opens{1};
+    CachedStream() { if (!parameters) throw std::bad_alloc(); }
+    ~CachedStream() { avcodec_parameters_free(&parameters); }
+};
 struct Input {
     AVFormatContext* fmt = nullptr;
     AVCodecContext* dec = nullptr;
@@ -79,7 +86,8 @@ struct Input {
         }
         check(rc, stage);
     }
-    explicit Input(const std::filesystem::path& path, const Options* o = nullptr): options(o) {
+    explicit Input(const std::filesystem::path& path, const Options* o = nullptr,
+                   const CachedStream* cached = nullptr): options(o) {
         require(std::filesystem::is_regular_file(path), "input must be a local regular file");
         try {
             fmt = avformat_alloc_context(); if (!fmt) throw std::bad_alloc();
@@ -88,9 +96,25 @@ struct Input {
             av_dict_set(&opts, "protocol_whitelist", "file", 0);
             int rc = avformat_open_input(&fmt, path.c_str(), nullptr, &opts);
             av_dict_free(&opts); check_io(rc, "open video");
-            check_io(avformat_find_stream_info(fmt, nullptr), "probe video");
-            stream = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-            check(stream, "find video stream");
+            if (cached) {
+                stream = cached->info.stream_index;
+                // MPEG-PS discovers its streams while reading packets, unlike
+                // header-based containers. Preserve FFmpeg's buffered probe
+                // packets so reopening does not discard the first frames.
+                if (stream >= 0 && unsigned(stream) >= fmt->nb_streams)
+                    check_io(avformat_find_stream_info(fmt, nullptr), "discover reopened video streams");
+                require(stream >= 0 && unsigned(stream) < fmt->nb_streams,
+                        "cached video stream is absent from reopened source");
+                check(avcodec_parameters_copy(fmt->streams[stream]->codecpar, cached->parameters),
+                      "reuse cached stream parameters");
+                fmt->streams[stream]->time_base =
+                    {cached->info.time_base_num, cached->info.time_base_den};
+                cached->decoder_opens.fetch_add(1);
+            } else {
+                check_io(avformat_find_stream_info(fmt, nullptr), "probe video");
+                stream = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+                check(stream, "find video stream");
+            }
             const AVCodec* codec = avcodec_find_decoder(fmt->streams[stream]->codecpar->codec_id);
             require(codec != nullptr, "video decoder not available");
             dec = avcodec_alloc_context3(codec); if (!dec) throw std::bad_alloc();
@@ -147,9 +171,16 @@ Info inspect_input(const Input& in) {
     auto* st = in.st(); auto* c = st->codecpar;
     x.width=c->width; x.height=c->height; x.stream_index=in.stream;
     x.time_base_num=st->time_base.num; x.time_base_den=st->time_base.den;
+    x.average_fps_num=st->avg_frame_rate.num; x.average_fps_den=st->avg_frame_rate.den;
+    x.nominal_fps_num=st->r_frame_rate.num; x.nominal_fps_den=st->r_frame_rate.den;
+    for (unsigned i=0;i<in.fmt->nb_streams;++i)
+        if (in.fmt->streams[i]->codecpar->codec_type==AVMEDIA_TYPE_AUDIO) ++x.audio_stream_count;
+    x.container=in.fmt->iformat->name;
     auto fps=av_guess_frame_rate(in.fmt, st, nullptr); x.fps_num=fps.num; x.fps_den=fps.den;
     x.duration_seconds=st->duration == AV_NOPTS_VALUE ?
         (in.fmt->duration == AV_NOPTS_VALUE ? 0 : double(in.fmt->duration)/AV_TIME_BASE) : st->duration*av_q2d(st->time_base);
+    x.duration_known=(st->duration!=AV_NOPTS_VALUE || in.fmt->duration!=AV_NOPTS_VALUE) &&
+                     std::isfinite(x.duration_seconds) && x.duration_seconds>=0;
     x.reported_frames=st->nb_frames; x.codec=avcodec_get_name(c->codec_id);
     const char* pix=av_get_pix_fmt_name(static_cast<AVPixelFormat>(c->format)); x.pixel_format=pix?pix:"unknown";
     const char* orders[]={"unknown","progressive","tt","bb","tb","bt"};
@@ -243,6 +274,20 @@ struct Scaler {
     }
 };
 } // namespace
+OutputGeometry output_geometry(const Info& info, const Options& options) {
+    validate(options);
+    require_resource(info.width > 0 && info.height > 0 &&
+        std::int64_t(info.width) * info.height <= options.max_pixels,
+        "source dimensions exceed max_pixels");
+    const Rect crop = options.crop.value_or(Rect{0, 0, info.width, info.height});
+    require(std::int64_t(crop.x) + crop.width <= info.width &&
+            std::int64_t(crop.y) + crop.height <= info.height,
+            "bbox exceeds decoded frame bounds");
+    OutputGeometry result{output_dimension(crop.width, options), output_dimension(crop.height, options)};
+    require_resource(std::int64_t(result.width) * result.height <= options.max_pixels,
+                     "scaled dimensions exceed max_pixels");
+    return result;
+}
 
 Info inspect(const std::filesystem::path& path) { Input in(path); return inspect_input(in); }
 
@@ -250,7 +295,8 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
                           const std::function<void(Frame&&)>& consume,
                           const std::vector<Timing>* reusable_index=nullptr,
                           const Stats* reusable_index_stats=nullptr,
-                          const std::function<void(const Stats&)>& report_progress={}) {
+                          const std::function<void(const Stats&)>& report_progress={},
+                          const CachedStream* cached=nullptr) {
     validate(o); require(bool(consume),"frame callback is required");
     const auto original_size=std::filesystem::file_size(path);
     const auto original_time=std::filesystem::last_write_time(path);
@@ -264,7 +310,7 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
         stats.index_seconds=reusable_index_stats->index_seconds;
     }
     if(o.mode==ReadMode::IndexedSeek && !index_ptr) {
-        auto started=Clock::now(); Input scan(path,&o); auto f=frame();
+        auto started=Clock::now(); Input scan(path,&o,cached); auto f=frame();
         std::optional<std::int64_t> delta; bool variable=false;
         while(true) {
             if(o.end && owned_index.size()>std::uint64_t(*o.end)+2) break;
@@ -290,7 +336,7 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
     if(o.mode==ReadMode::IndexedSeek)
         require(std::uint64_t(o.start)<index.size(),"start_frame is beyond EOF");
     if(report_progress) report_progress(stats);
-    auto started=Clock::now(); auto input=std::make_unique<Input>(path,&o); auto f=frame();
+    auto started=Clock::now(); auto input=std::make_unique<Input>(path,&o,cached); auto f=frame();
     std::int64_t cursor=0; bool first_ready=false;
     if(!index.empty() && o.start>1) {
         // Leave a preceding source frame for bwdif, then choose a preceding keyframe.
@@ -302,7 +348,7 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
             // H.264 open GOPs). Decode through the first requested frame before publishing any
             // output. A reference failure then has a side-effect-free sequential fallback.
             try {
-                Input probe(path,&o);
+                Input probe(path,&o,cached);
                 if(probe.seek(index[key].pts)) {
                     auto probe_frame=frame();
                     while(probe.next(probe_frame.get())) {
@@ -342,11 +388,14 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
     std::unique_ptr<Filter> filter; Scaler scaler;
     struct Pending {std::int64_t index, pts; bool deinterlaced;};
     std::deque<Pending> pending;
+    std::optional<std::int64_t> first_pts;
+    if (!index.empty()) first_pts=index.front().pts;
     auto emit=[&](AVFrame* decoded,const Pending& p) {
         if(p.index<o.start || (o.end && p.index>*o.end) || (p.index-o.start)%(o.skip+1)!=0) return;
         require_resource(stats.selected_frames<o.max_selected_frames,"selection exceeds max_selected_frames"); checkpoint(o);
         auto result=scaler.convert(decoded,o); result.source_index=p.index; result.source_pts=p.pts;
-        result.timestamp_seconds=p.pts*av_q2d(tb); result.deinterlaced=p.deinterlaced;
+        result.timestamp_seconds=double((static_cast<long double>(p.pts)-*first_pts)*tb.num/tb.den);
+        result.deinterlaced=p.deinterlaced;
         consume(std::move(result)); ++stats.selected_frames;
     };
     auto filtered=frame();
@@ -371,6 +420,7 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
         if(!initial_width){initial_width=f->width;initial_height=f->height;initial_format=f->format;}
         require(f->width==initial_width && f->height==initial_height && f->format==initial_format,"midstream geometry/pixel-format change is unsupported");
         auto stamp=pts(f.get());
+        if (!first_pts) first_pts=stamp;
         if(!index.empty()) require(std::uint64_t(cursor)<index.size() && index[std::size_t(cursor)].pts==stamp,"seek decode differs from indexed display order");
         const bool apply=o.deinterlace==Deinterlace::On ||
             (o.deinterlace==Deinterlace::Auto && interlaced(f.get()));
@@ -401,6 +451,11 @@ static Stats process_impl(const std::filesystem::path& path,const Options& o,
 struct VideoSource::Impl {
     std::filesystem::path path;
     Info metadata;
+    std::shared_ptr<CachedStream> cached;
+    std::optional<bool> variable_rate;
+    std::string observed_interlace;
+    std::optional<std::string> observed_field_order;
+    std::optional<double> indexed_duration;
     std::uintmax_t size;
     std::filesystem::file_time_type modified;
     mutable std::mutex mutex;
@@ -411,11 +466,15 @@ struct VideoSource::Impl {
     Stats index_stats;
     SourceStats diagnostics;
 
-    explicit Impl(std::filesystem::path p):path(std::move(p)) {
-        Input input(path);
-        metadata=inspect_input(input);
+    explicit Impl(std::filesystem::path p, const Options& options):path(std::move(p)) {
         size=std::filesystem::file_size(path);
         modified=std::filesystem::last_write_time(path);
+        Input input(path, &options);
+        metadata=inspect_input(input);
+        cached=std::make_shared<CachedStream>();
+        cached->info=metadata;
+        check(avcodec_parameters_copy(cached->parameters,input.st()->codecpar),"cache stream parameters");
+        require_unchanged();
     }
     void require_unchanged() const {
         ninfer::media::local_video::require_unchanged(
@@ -447,8 +506,10 @@ struct VideoSource::Impl {
                 auto candidate=std::make_shared<std::vector<Timing>>();
                 std::int64_t candidate_max_pixels=0;
                 int candidate_width=0,candidate_height=0,candidate_format=-1;
-                Input scan(path,&o); auto f=frame();
+                Input scan(path,&o,cached.get()); auto f=frame();
                 std::optional<std::int64_t> delta; bool variable=false;
+                bool progressive=false, fields=false, top=false, bottom=false;
+                std::int64_t last_duration=0;
                 while(scan.next(f.get())) {
                     geometry(f.get(),o);
                     if(candidate_width==0) {
@@ -464,6 +525,11 @@ struct VideoSource::Impl {
                                                   std::int64_t(f->width)*f->height);
                     require_resource(candidate->size()<std::uint64_t(o.max_scan_frames),"index exceeds max_scan_frames");
                     auto stamp=pts(f.get());
+                    if (interlaced(f.get())) {
+                        fields=true;
+                        if (f->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST) top=true; else bottom=true;
+                    } else progressive=true;
+                    last_duration=f->duration;
                     if(!candidate->empty()) {
                         require(stamp>candidate->back().pts,"non-increasing PTS cannot be indexed unambiguously");
                         auto d=stamp-candidate->back().pts;
@@ -473,6 +539,43 @@ struct VideoSource::Impl {
                     candidate->push_back({stamp,(f->flags & AV_FRAME_FLAG_KEY)!=0});
                 }
                 require_unchanged();
+                require(!candidate->empty(),"video contains no decoded frame");
+                std::optional<bool> candidate_variable;
+                if (candidate->size()>=3) {
+                    // Fixed-rate timestamps can alternate by a tick after rational rescaling.
+                    const long double step=(static_cast<long double>(candidate->back().pts)-
+                                            candidate->front().pts)/(candidate->size()-1);
+                    bool linear=true;
+                    for (std::size_t i=1;i<candidate->size();++i) {
+                        checkpoint(o);
+                        if (std::abs((static_cast<long double>((*candidate)[i].pts)-
+                                      candidate->front().pts)-step*i)>1.0L) { linear=false; break; }
+                    }
+                    if (!linear) candidate_variable=true;
+                    else if (!variable) candidate_variable=false;
+                    else if (metadata.nominal_fps_num>0 && metadata.nominal_fps_den>0) {
+                        const long double reported_step =
+                            static_cast<long double>(metadata.time_base_den)*metadata.nominal_fps_den/
+                            (static_cast<long double>(metadata.time_base_num)*metadata.nominal_fps_num);
+                        bool reported_linear=true;
+                        for (std::size_t i=1;i<candidate->size();++i) {
+                            checkpoint(o);
+                            if (std::abs((static_cast<long double>((*candidate)[i].pts)-
+                                          candidate->front().pts)-reported_step*i)>1.0L) {
+                                reported_linear=false; break;
+                            }
+                        }
+                        if (reported_linear) candidate_variable=false;
+                        // Small irregularities without a matching reported cadence remain unknown.
+                    }
+                }
+                if (last_duration<=0 && candidate->size()>1)
+                    last_duration=candidate->back().pts-(*candidate)[candidate->size()-2].pts;
+                std::optional<double> candidate_duration;
+                if (last_duration>0)
+                    candidate_duration=double((static_cast<long double>(candidate->back().pts)-
+                                               candidate->front().pts+last_duration)*
+                                              metadata.time_base_num/metadata.time_base_den);
                 Stats completed;
                 completed.indexed_frames=static_cast<std::int64_t>(candidate->size());
                 completed.index_reached_eof=true;
@@ -481,10 +584,15 @@ struct VideoSource::Impl {
                 {
                     std::lock_guard lock(mutex);
                     index_stats=completed;
+                    variable_rate=candidate_variable;
+                    observed_interlace=fields?(progressive?"mixed":"interlaced"):"progressive";
+                    if (fields && top!=bottom) observed_field_order=top?"tff":"bff";
+                    indexed_duration=candidate_duration;
                     index_max_pixels=candidate_max_pixels;
                     index=std::move(candidate); // Publish only a complete, unchanged index.
                     ++diagnostics.index_builds;
                     diagnostics.index_scanned_frames+=completed.indexed_frames;
+                    diagnostics.index_seconds=completed.index_seconds;
                     index_building=false;
                 }
                 index_changed.notify_all();
@@ -540,7 +648,7 @@ struct VideoReader::Impl {
                     cv.notify_all();
                 },index.get(),index?&index_stats:nullptr,[this](const Stats& stats) {
                     std::lock_guard lock(mutex); live_stats=stats;
-                });
+                },source->cached.get());
                 std::lock_guard lock(mutex); final_stats=std::move(stats); finished=true;
             } catch(...) {
                 std::lock_guard lock(mutex);
@@ -562,13 +670,82 @@ struct VideoReader::Impl {
     }
 };
 
-VideoSource::VideoSource(std::filesystem::path path):impl_(std::make_shared<Impl>(std::move(path))) {}
+VideoSource::VideoSource(std::filesystem::path path, const Options& options)
+    :impl_(std::make_shared<Impl>(std::move(path), options)) {}
 VideoSource::~VideoSource()=default;
 VideoSource::VideoSource(VideoSource&&) noexcept=default;
 VideoSource& VideoSource::operator=(VideoSource&&) noexcept=default;
 const Info& VideoSource::info() const noexcept { return impl_->metadata; }
 SourceStats VideoSource::source_stats() const {
-    std::lock_guard lock(impl_->mutex); return impl_->diagnostics;
+    std::lock_guard lock(impl_->mutex);
+    auto result=impl_->diagnostics;
+    result.decoder_opens=impl_->cached->decoder_opens.load();
+    return result;
+}
+Metadata VideoSource::metadata(const Options& options) {
+    impl_->require_unchanged();
+    if (!impl_->metadata.duration_known) impl_->ensure_index(options);
+    std::lock_guard lock(impl_->mutex);
+    Metadata result;
+    result.info=impl_->metadata;
+    if (impl_->index) {
+        result.frame_count=static_cast<std::int64_t>(impl_->index->size());
+        result.variable_frame_rate=impl_->variable_rate;
+        result.interlace_mode=impl_->observed_interlace;
+        result.field_order=impl_->observed_field_order;
+    } else {
+        const auto& order=result.info.field_order;
+        if (order=="progressive") result.interlace_mode="progressive";
+        else if (order=="tt" || order=="tb" || order=="bb" || order=="bt") {
+            result.interlace_mode="interlaced";
+            result.field_order=(order=="tt" || order=="bt")?"tff":"bff";
+        }
+    }
+    if (!result.info.duration_known) {
+        require(impl_->indexed_duration.has_value(),"video duration could not be determined");
+        result.info.duration_seconds=*impl_->indexed_duration;
+        result.info.duration_known=true;
+    }
+    return result;
+}
+TimeResolution VideoSource::resolve_time(double seconds,int radius,const Options& options) {
+    require(std::isfinite(seconds) && seconds>=0,"video time must be finite and nonnegative");
+    require(radius>=0 && radius<=16,"radius_frames must be in [0,16]");
+    impl_->ensure_index(options);
+    std::lock_guard lock(impl_->mutex);
+    const auto& index=*impl_->index;
+    const auto origin=index.front().pts;
+    const auto timestamp=[&](std::size_t i) {
+        return (static_cast<long double>(index[i].pts)-origin)*
+               impl_->metadata.time_base_num/impl_->metadata.time_base_den;
+    };
+    if (seconds>double(timestamp(index.size()-1)))
+        throw Error(ErrorKind::InvalidInput,"video_time_out_of_range: time exceeds last frame timestamp");
+    auto it=std::lower_bound(index.begin(),index.end(),static_cast<long double>(seconds),
+        [&](const Timing& value,long double target) {
+            return (static_cast<long double>(value.pts)-origin)*
+                   impl_->metadata.time_base_num/impl_->metadata.time_base_den<target;
+        });
+    std::size_t nearest=it==index.end()?index.size()-1:std::size_t(it-index.begin());
+    if (nearest>0) {
+        // Round the exact midpoint to the API's double precision. This recognizes
+        // decimal midpoint inputs without widening the tie to adjacent doubles,
+        // and keeps a large absolute PTS origin out of the distance comparison.
+        const auto earlier=timestamp(nearest-1);
+        const double midpoint=static_cast<double>(earlier+(timestamp(nearest)-earlier)/2);
+        if (seconds<=midpoint) --nearest;
+    }
+    const auto timing=[&](std::size_t i) {
+        return FrameTiming{static_cast<std::int64_t>(i),index[i].pts,double(timestamp(i))};
+    };
+    TimeResolution result;
+    result.requested_time_seconds=seconds;
+    result.nearest=timing(nearest);
+    const auto first=nearest>std::size_t(radius)?nearest-radius:0;
+    const auto last=std::min(index.size()-1,nearest+radius);
+    for (auto i=first;i<=last;++i) result.frames.push_back(timing(i));
+    impl_->require_unchanged();
+    return result;
 }
 VideoPlan VideoSource::plan(const Options& options) {
     validate(options);
@@ -578,16 +755,10 @@ VideoPlan VideoSource::plan(const Options& options) {
     require(!impl_->index->empty(), "video contains no decoded frame");
     require(static_cast<std::uint64_t>(options.start) < impl_->index->size(),
             "start_frame is beyond EOF");
-    const Rect crop = options.crop.value_or(Rect{0, 0, impl_->metadata.width,
-                                                  impl_->metadata.height});
-    require(std::int64_t(crop.x) + crop.width <= impl_->metadata.width &&
-                std::int64_t(crop.y) + crop.height <= impl_->metadata.height,
-            "bbox exceeds decoded frame bounds");
+    const auto dimensions = output_geometry(impl_->metadata, options);
     VideoPlan result;
-    result.width = output_dimension(crop.width, options);
-    result.height = output_dimension(crop.height, options);
-    require_resource(std::int64_t(result.width) * result.height <= options.max_pixels,
-                     "scaled dimensions exceed max_pixels");
+    result.width = dimensions.width;
+    result.height = dimensions.height;
     result.index_stats = impl_->index_stats;
     const std::int64_t available_end = static_cast<std::int64_t>(impl_->index->size() - 1);
     const std::int64_t selected_end =
@@ -600,8 +771,8 @@ VideoPlan VideoSource::plan(const Options& options) {
                          "selection exceeds max_selected_frames");
         const auto stamp = impl_->index->at(static_cast<std::size_t>(index)).pts;
         result.selected_frames.push_back(
-            {index, stamp, stamp * (double(impl_->metadata.time_base_num) /
-                                    impl_->metadata.time_base_den)});
+            {index, stamp, double((static_cast<long double>(stamp)-impl_->index->front().pts)*
+                                 impl_->metadata.time_base_num/impl_->metadata.time_base_den)});
         if (selected_end - index < stride) { break; }
         index += stride;
     }

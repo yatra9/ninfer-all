@@ -79,4 +79,4 @@ WORKDIR /workspace
 EXPOSE 8080
 STOPSIGNAL SIGTERM
 
-CMD ["ninfer-serve", "/models/huihui-Qwen3.8-27B-abliterated-NInfer-v3/Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer", "--host", "0.0.0.0", "--model-id", "qwen3.8-27b", "--max-context", "163840", "--kv-capacity", "163840", "--kv-dtype", "rk8v4", "--gdn-state-fp16", "--spec", "mtp", "--draft-tokens", "3", "--lm-head-draft", "--vision", "--vision-residency", "overlay", "--vision-max-merged", "16384", "--enable-model-suspend", "--host-kv-mib", "8192", "--host-state-slots", "8"]
+CMD ["ninfer-serve", "/models/huihui-Qwen3.8-27B-abliterated-NInfer-v3/Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer", "--host", "0.0.0.0", "--local-media-root", "/videos", "--model-id", "qwen3.8-27b", "--max-context", "163840", "--kv-capacity", "163840", "--kv-dtype", "rk8v4", "--gdn-state-fp16", "--spec", "mtp", "--draft-tokens", "3", "--lm-head-draft", "--vision", "--vision-residency", "overlay", "--vision-max-merged", "16384", "--enable-model-suspend", "--host-kv-mib", "8192", "--host-state-slots", "8"]

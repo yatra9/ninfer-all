@@ -76,6 +76,39 @@ int main() {
                     spec.deinterlace == local_video::DeinterlaceMode::On && !spec.autotone,
                 "valid URL parsed incorrectly");
 
+        auto built_spec=spec;
+        const auto single = local_video::parse_local_video_url(
+            "ninfer-video:///videos/a.mp4?frame=100&bbox=0,0,32,32&scale=2&deinterlace=off&autotone=0");
+        require(single.frame == 100 && single.bbox && single.scale == 2,
+                "single-frame spatial controls were lost");
+        require(local_video::parse_local_video_url(local_video::build_local_video_url(single)).frame == 100,
+                "single-frame URI did not round trip");
+        require(local_video::parse_local_video_url("ninfer-video:///a?frame=0").frame == 0,
+                "frame zero was treated as absent");
+        for (const auto* invalid : {"frame=-1", "frame=1.5", "frame=9223372036854775808"}) {
+            rejects([&] { return local_video::parse_local_video_url(std::string("ninfer-video:///a?") + invalid); }, "frame");
+        }
+        for (const auto* range : {"start_frame=0", "end_frame=100", "skip_frame=0"}) {
+            for (bool reverse : {false, true}) {
+                rejects([&] { return local_video::parse_local_video_url(std::string("ninfer-video:///a?") +
+                    (reverse ? std::string(range) + "&frame=100" : "frame=100&" + std::string(range))); }, "cannot be combined");
+            }
+        }
+        rejects([&] { auto value = single; value.end_frame = 100;
+                      return local_video::build_local_video_url(value); }, "cannot be combined");
+        built_spec.path="/videos/日本語 %?#&.mp4";
+        built_spec.scale=1.2345678901234567;
+        const auto built=local_video::build_local_video_url(built_spec);
+        const auto roundtrip=local_video::parse_local_video_url(built);
+        require(roundtrip.path==built_spec.path && roundtrip.start_frame==100 &&
+                roundtrip.end_frame==1000 && roundtrip.skip_frame==2 &&
+                roundtrip.bbox->x==320 && roundtrip.scale==built_spec.scale &&
+                roundtrip.deinterlace==built_spec.deinterlace,"builder round trip changed controls");
+        require(built.find("%3F%23%26")!=std::string::npos,"reserved path characters were not escaped");
+        require(local_video::build_local_video_url(roundtrip)==built,"URI was not canonical");
+        rejects([] { local_video::LocalVideoSpec value; value.path="relative.mp4";
+                     return local_video::build_local_video_url(value); },"absolute");
+
         rejects([] { return local_video::parse_local_video_url("ninfer-video://server/a.mp4"); },
                 "authority");
         rejects([] { return local_video::parse_local_video_url("ninfer-video:///a.mp4#fragment"); },
