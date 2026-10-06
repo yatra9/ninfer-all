@@ -348,3 +348,8 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - mcp/AGENTS.mdとmcp/SKILL.mdを動画調査の実行者向けに書き直した。起動オプション、内部URI、mount、providerなど運用・実装の説明を削除し、3 toolsの役割、調査手順、単一frame/範囲/時刻/切り抜きの4例、観察結果の回答と再試行を記載。設定・配置の説明は既存mcp/README.mdを参照する構成を維持。
 - 最新tool schemaと引数・結果の対応を照合し、4つのJSON例のparse成功、完全diff reviewとgit diff --check成功。実行コード・公開schemaの変更はなく、build/GPU/OpenCode E2Eは実行していない。変更は指示文のみのため追加の実行テストは不要。
 - 修正完了。判断待ち・次の実装作業なし。既に配置済みの場合はこの2ファイルの内容を利用先へ反映する。
+
+### AGENTSをskill利用の案内に簡略化
+
+- mcp/AGENTS.mdを、動画確認の依頼時にninfer-video skillを読み、その手順で自分自身が映像を確認できることを伝える短い指示に変更。ツール説明と調査手順はSKILL.mdへ集約。
+- 全差分を確認し、skill名と参照先の整合、git diff --checkを検証。文言のみの変更のためbuildや実行テストは不要。作業完了、判断待ちなし。
