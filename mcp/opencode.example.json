@@ -8,7 +8,7 @@
       "models": {
         "qwen3.8-27b": {
           "name": "Qwen3.8-27B", "attachment": true, "tool_call": true,
-          "limit": {"context": 8192, "output": 1024},
+          "limit": {"context": 163840, "output": 1024},
           "modalities": {"input": ["text", "image", "video"], "output": ["text"]}
         }
       }

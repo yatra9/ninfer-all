@@ -22,7 +22,7 @@ wslc run -d --name ninfer-video-server --gpus all `
   /models/huihui-Qwen3.8-27B-abliterated-NInfer-v3/Huihui-Qwen3.8-27B-abliterated-ninfer-v3.ninfer `
   --host 0.0.0.0 --model-id qwen3.8-27b --api-key local `
   --vision --vision-residency overlay --vision-max-merged 16384 `
-  --max-context 8192 --kv-capacity 8192 --kv-dtype rk8v4 --gdn-state-fp16 `
+  --max-context 163840 --kv-capacity 163840 --kv-dtype rk8v4 --gdn-state-fp16 `
   --local-media-root /videos --reference-path-map "$videoDir" /videos
 wslc logs ninfer-video-server
 ```
@@ -40,6 +40,8 @@ mapは複数回指定可能。Linux hostなら `-v /home/koji/videos:/videos:ro`
 `--reference-path-map /home/koji/videos /videos` のように組み合わせる。
 Windows側のOpenCodeには `C:/Videos/demo.mp4`、Linux側なら `/home/koji/videos/demo.mp4` と指示できる。
 直接 `/videos/demo.mp4` を指定することもできる。
+
+OpenCodeは短い質問でもsystem指示やtool定義を送るため、8,192 tokensでは最初の要求から上限を超える場合がある。上の例はDockerfileのCMDと同じ163,840 tokensを指定している。OpenCode設定の`limit.context`も同じ値にする。変更後はサーバーとOpenCodeを再起動する。必要なVRAMはKV容量に応じて増える。
 
 ## 2. OpenCodeの配置先を選ぶ
 

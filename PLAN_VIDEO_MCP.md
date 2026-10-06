@@ -353,3 +353,8 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 
 - mcp/AGENTS.mdを、動画確認の依頼時にninfer-video skillを読み、その手順で自分自身が映像を確認できることを伝える短い指示に変更。ツール説明と調査手順はSKILL.mdへ集約。
 - 全差分を確認し、skill名と参照先の整合、git diff --checkを検証。文言のみの変更のためbuildや実行テストは不要。作業完了、判断待ちなし。
+
+### OpenCode起動例のcontext容量修正
+
+- ユーザー環境で短い質問でもmessages 2 / tools 12のprepared promptが8192 tokensを超えて拒否された。mcp/README.mdのmax-context/kv-capacityとopencode.example.jsonのlimit.contextを、既存Dockerfile CMDと同じ163840へ修正。system指示/tool定義も入力容量を消費することと再起動・VRAM増加を説明。
+- 設定JSON parse、3つの容量値とDockerfileの整合、全差分review、git diff --checkを確認。利用中のGPUサーバー停止・再起動や実OpenCode要求の再試行は行っていないため、変更値での当該環境の実行は未検証。次は利用者側で起動引数と使用中のOpenCode設定を更新して再試行する。コード変更・判断待ちはない。
