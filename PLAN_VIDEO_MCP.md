@@ -342,3 +342,9 @@ v1 完了。追加の実装・ユーザー判断待ちはない。再検証は t
 - ユーザー追加要求に従い、最新production MCP routeを使用するWSLC CPU HTTP fixtureへinitialize→initialized→tools/listを送信し、そのresultをmcp/tool-schema.jsonへ保存。3 toolsの内容は既存HEAD schemaと意味上完全一致、変更はresponseのkey orderへ同期するもの。GPUモデルはロードしていない。
 - 開発container/imagesが再び削除されていたため既存BuildKit cacheからninfer-all:build/:dev/ninfer-all-devを復元。baselineは前checkpointと同じ /build/686c96faa22541ca0074bacfa46b09ea921869de8ec4799e10e1c457cc481da4。production buildとHTTP fixture build成功、CUDA再コンパイルなし。export fixtureは終了し、dev containerは保持。
 - 完全diff review、JSON意味比較、git diff --check成功。schemaの公開契約変更がないdocumentation/example単位のため、既存CPU/GPU回帰の追加再実行は不要。実装・ユーザー判断待ちなし。利用者はmcp/README.mdに従い自分のOpenCode配置先へコピー/既存設定へマージする。
+
+### エージェント向け指示の見直し
+
+- mcp/AGENTS.mdとmcp/SKILL.mdを動画調査の実行者向けに書き直した。起動オプション、内部URI、mount、providerなど運用・実装の説明を削除し、3 toolsの役割、調査手順、単一frame/範囲/時刻/切り抜きの4例、観察結果の回答と再試行を記載。設定・配置の説明は既存mcp/README.mdを参照する構成を維持。
+- 最新tool schemaと引数・結果の対応を照合し、4つのJSON例のparse成功、完全diff reviewとgit diff --check成功。実行コード・公開schemaの変更はなく、build/GPU/OpenCode E2Eは実行していない。変更は指示文のみのため追加の実行テストは不要。
+- 修正完了。判断待ち・次の実装作業なし。既に配置済みの場合はこの2ファイルの内容を利用先へ反映する。

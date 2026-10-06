@@ -1,65 +1,100 @@
 ---
 name: ninfer-video
-description: NInferのMCPツールでローカル動画を実際に見る。単一frameの画像確認、動画範囲の探索、時刻とsource frameの対応、cropやscaleでの詳細確認に使用する。
+description: ローカル動画の内容を実際に見て調べる。動画の要約、場面や変化の探索、指定時刻・フレームの確認、画面内の文字や物体の詳細確認に使う。
 ---
 
-# NInfer video inspection
+# 動画の調査
 
-`get_video_metadata`、`resolve_video_time`、`inspect_video` はNInfer内蔵MCPサーバーのツール。
-OpenCodeではMCP名を含むtool名として公開されるので、利用可能なtoolsから該当するものを選ぶ。
-`inspect_video` が返すresource linkは、同じagentの次のモデル入力へ視覚情報として渡される。
+ユーザーの質問に答えるために、見る範囲と細かさを選び、必要な映像を確認する。
+`inspect_video`を使うと、あなた（AI）自身が選択した映像を見ることができる。
+1枚を指定した場合は画像として、範囲を指定した場合は選択したフレーム列として見る。
+確認後は、あなた自身が映像を読み取り、ユーザーの質問に答える。
 
-## Path
+## ツールの役割
 
-- path引数は絶対local path。例：`/videos/demo.mp4`、map設定がある場合の `C:\Videos\demo.mp4` や `/home/koji/videos/demo.mp4`。
-- Windows pathをJSONで書くときはbackslashをescapeする。例：`"C:\\Videos\\demo.mp4"`。`C:/Videos/demo.mp4` も使用できる。
-- host pathはサーバーの `--reference-path-map HOST_DIR CONTAINER_DIR` が設定されている場合に使用する。
-- mapはmountを作らない。返されるmetadata pathやnative URIはcontainer pathであり、それをhost側のread/fileツールで開こうとしない。
-- pathに `file://`、`ninfer-video://`、選択用queryを付けない。選択条件は別のtool引数を使う。
+| ツール | 使う場面 | 主な入力と結果 |
+|---|---|---|
+| `get_video_metadata` | 動画の長さや構成を知り、調査範囲を決める | `path`を指定。長さ、幅・高さ、フレーム数、FPS、固定／可変フレームレート、音声の有無などが返る。映像を見るツールではない。 |
+| `resolve_video_time` | 「12.5秒の場面」など、時刻から見るフレームを決める | `path`と`time_seconds`を指定。最も近いフレーム番号、実際の時刻、前後のフレーム情報が返る。 |
+| `inspect_video` | 映像の内容、文字、物体、動きや変化を確認する | `path`と`instruction`に加え、1枚または範囲を指定。選択した映像をあなた自身が見られる。 |
 
-## First inspection
+利用可能なツール名に接頭辞が付いている場合は、対応するツールを選ぶ。
+`path`にはユーザーが指定した動画の絶対パスを渡す。例：`C:/Videos/demo.mp4`、`/home/koji/videos/demo.mp4`。
+見るフレームや切り抜き条件は、それぞれの引数で指定する。
 
-まず `get_video_metadata(path)` でsource寸法、duration、FPS、CFR/VFR、frame count、interlace情報を確認する。
-不明な値は不明のまま扱う。frame countがnullの場合は、duration×FPSをexact countとして扱わない。
+## 調査の進め方
 
-1枚を見る場合：
+1. 質問の対象を整理する。動画全体の要約、特定場面の探索、指定フレームの確認、細部の読み取りのどれが必要かを判断する。
+2. 長さや寸法、FPSが必要なら`get_video_metadata`で確認する。既にフレーム番号が指定され、必要な情報が揃っていれば、そのフレームを直接見てよい。
+3. `inspect_video`で目的に合う範囲を確認する。長い動画は区間に分け、最初は間引いて全体の流れを把握する。
+4. 気になる箇所は範囲を狭め、間引きを減らして見直す。文字や細部は1枚を選び、必要なら切り抜く。
+5. 質問に答える根拠が揃ったら回答する。根拠となるフレーム番号や範囲を添え、確認した事実と推測を区別する。
 
-```json
-{"path":"C:/Videos/demo.mp4","instruction":"このframeの表示内容を確認して","frame":100}
-```
+## 1枚のフレームを見る
 
-frameは0始まり。あなた自身がそのframeを画像として見られる。
-frameとstart_frame/end_frame/skip_frameは、明示した値が0でも同時指定できない。
-bbox、scale、deinterlaceはframeと併用できる。
-
-## Time range
-
-CFRと固定FPSが確認済みなら、通常は `frame ≈ time_seconds × fps` で境界を求める。
-正確な境界が必要、VFR、またはCFR/VFR不明の場合は、開始と終了について別々に
-`resolve_video_time(path, time_seconds)` を呼び、返された実timestampからframeを選ぶ。
-VFRにaverage_fps/nominal_fpsを掛けてframe番号を推定しない。
-
-時刻はsource frame 0のPTSを0秒とする。nearestが前後に同距離なら前側を選ぶ。
-開始境界は目的時刻以降、終了境界は目的時刻以前のframeを選ぶ必要がある場合、近傍framesも確認する。
-最終frame timestampを超える時刻はerrorになる。
-
-## Coarse to detailed inspection
+`inspect_video`の呼び出し例：
 
 ```json
-{"path":"/videos/demo.mp4","instruction":"画面が切り替わる箇所を探して","start_frame":0,"end_frame":299,"skip_frame":29,"scale":0.5}
+{"path":"C:/Videos/demo.mp4","instruction":"画面に表示されている文字を読んで確認する","frame":100}
 ```
 
-- start/endはinclusiveなsource frame番号。skip_frame=Nは選択frame間でN枚飛ばす（29なら30枚ごと）。
-- 長い動画は短い範囲と大きめのskipから探索し、気になる区間を絞って再確認する。飛ばしたframeの出来事まで断言しない。
-- 詳細は `frame=N`、または短い範囲＋小さいskipで見る。bboxはsource pixel座標のx/y/width/height。
-- cropしてからscaleが適用される。出力寸法は最寄りの32の倍数、最低32へ丸められる。
-- deinterlaceは通常auto。明確な理由がある場合にon/offを指定する。
-- tool/inferenceがbudget errorになったら、範囲、選択frame数、scale、cropを調整する。
-- 見えない細部・sampling間隔内の出来事・音声内容を推測しない。これらのtoolsは音声をモデルへ送らない。
+`instruction`には今回何を確認したいかを具体的に書く。
+`frame`は0始まりの元動画のフレーム番号。100は101枚目を意味する。
+このモードでは、その1枚をあなた自身が画像として見られる。
+`frame`を指定するときは`start_frame`、`end_frame`、`skip_frame`を省略する。値が0でも同時指定できない。
 
-## Failures
+## 範囲や動きを見る
 
-接続やtool discoveryに失敗したらMCP URL、認証、provider設定を確認する。
-path errorはmount、map、local-media-rootと実ファイル名を確認する。
-resource linkが返っても視覚入力が届かなければ、指定patched OpenCodeと `opencode-ninfer` providerを確認する。
-実際に視覚入力を受けていない場合は、その状態を明示する。
+`inspect_video`の呼び出し例：
+
+```json
+{"path":"C:/Videos/demo.mp4","instruction":"場面の切り替わりと登場する物体を確認する","start_frame":0,"end_frame":299,"skip_frame":29,"scale":0.5}
+```
+
+- `start_frame`と`end_frame`は両端を含む元動画のフレーム番号。省略するとそれぞれ動画の先頭・末尾になる。
+- `skip_frame=N`は、選択したフレームの間でN枚飛ばす。0なら全フレーム、29なら30枚ごと。上の例では0、30、60、…、270を見る。
+- 全体の要約には、動画全体を区間に分けて代表的なフレームを確認する。冒頭だけを見て全体の説明にしない。
+- 短い出来事や速い動きを調べるときは、対象区間の`skip_frame`を小さくする。大きく間引いた結果だけで「起きなかった」と断定しない。
+- 動きの方向や前後関係を判断するときは複数フレームを見る。1枚だけでは時間的な変化は判断できない。
+
+## 時刻で指定された場面を見る
+
+`resolve_video_time`の呼び出し例：
+
+```json
+{"path":"C:/Videos/demo.mp4","time_seconds":12.5,"radius_frames":2}
+```
+
+返された`nearest_frame_number`を`inspect_video`の`frame`に渡す。
+`radius_frames`は前後に返すフレーム数で、既定値2なら最も近いフレームを含め最大5枚分の情報が返る。
+これはフレーム番号と時刻の情報なので、映像の内容は続けて`inspect_video`で確認する。
+
+時刻は最初のフレームを0秒とする。区間を時刻で指定された場合は開始・終了をそれぞれ求める。
+境界を厳密に合わせる必要があれば、返された近傍フレームの`timestamp_seconds`も見て選ぶ。
+固定フレームレート（CFR）とFPSが確認できていれば、概算には`秒数 × FPS`を使える。
+可変フレームレート（VFR）や判定不明の場合、または正確な対応が必要な場合は`resolve_video_time`を使う。
+メタデータの不明値を補って断定したり、平均FPSから正確なフレーム番号・総数を作ったりしない。
+
+## 文字や細部を見る
+
+元動画の寸法と注目する位置を確認してから、`bbox`で必要な領域を切り抜く。
+`bbox`は元動画のピクセル座標で、左上の`x`・`y`と`width`・`height`を指定する。
+切り抜き例（この矩形が元動画の範囲内にある場合）：
+
+```json
+{"path":"C:/Videos/demo.mp4","instruction":"左上の表示領域の文字を確認する","frame":100,"bbox":{"x":0,"y":0,"width":320,"height":160},"scale":2.0}
+```
+
+`scale`は切り抜き後の拡大・縮小率。0.5で縦横を半分に、2.0で2倍にする。
+全体を見るときは縮小を使い、細部は必要な領域を切り抜いて確認する。拡大しても読み取れない文字は不明とする。
+`bbox`、`scale`、`deinterlace`は1枚・範囲のどちらでも使える。
+`deinterlace`は通常省略して自動判定に任せる。縞状の乱れが見える場合は`on`で見直す。
+
+## 結果の扱いと再試行
+
+- 回答は実際に見た映像に基づく。ファイル名やメタデータだけから内容を推測しない。
+- これらのツールでは音声を聞けない。音声ありというメタデータから発話や効果音を説明しない。
+- 入力が大きすぎる場合は区間を短くする、間引きを増やす、縮小する、必要な領域だけ切り抜くなどして再試行する。
+- フレームが範囲外なら番号と動画の長さを確認する。時刻が末尾を超えた場合も指定を見直す。
+- ファイルにアクセスできない場合は、指定パスとエラー内容を確認し、解決できなければユーザーに利用可能な動画パスを確認する。
+- 映像を受け取れなかった場合は、見たことにせず、確認できなかったこととエラー内容を伝える。
